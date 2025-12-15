@@ -3,248 +3,217 @@ import pandas as pd
 import io
 import re
 
-st.set_page_config(layout="wide", page_title="Coupang 利润核算 (列号锁定版)")
-st.title("🔘 步骤五：多店铺利润核算 (列号锁定版)")
+st.set_page_config(layout="wide", page_title="Coupang 利润核算 (表头匹配版)")
+st.title("🔘 步骤五：多店铺利润核算 (表头匹配版)")
 st.markdown("### 操作流程：上传文件 -> 确认就绪 -> **点击按钮** -> 生成报表")
-st.caption("💡 已启用列号锁定：自动忽略表头语言（中/韩），仅依据列的位置读取数据。")
+st.caption("✅ 此版本逻辑：通过**表头名称**识别数据，不依赖列的顺序。")
 
 # ==========================================
-# 0. 【核心配置区】在这里统一管理列号
-# 说明：A列=0, B列=1, C列=2, ... L列=11, P列=15
+# 0. 【配置区】请确保你的表格里包含这些表头(列名)
+# 如果Coupang改了表头名字，请在这里修改
 # ==========================================
 
-# 1. 基础信息表 (Master)
-IDX_M_CODE   = 0    # 产品编号 (通常在 A列)
-IDX_M_SKU    = 3    # SKU/关联ID (通常在 D列)
-IDX_M_PROFIT = 10   # 单件毛利 (通常在 K列)
+# A. 基础信息表 (Master)
+# 需要包含: 注册商品ID, 单件毛利, 注册商品名称(或编号)
+KEY_M_SKU = '注册商品ID'     # 用于关联销售表
+KEY_M_PROFIT = '单件毛利'    # 用于计算利润
+KEY_M_CODE = '注册商品名称'  # 用于提取 C01 这种编号 (如果是其他列名请修改这里)
 
-# 2. 销售表 (Sales)
-IDX_S_ID     = 0    # 注册商品ID (通常在 A列)
-IDX_S_QTY    = 8    # 销量 (通常在 I列)
+# B. 销售表 (Sales)
+# 需要包含: 注册商品ID, 销售数量
+KEY_S_ID = '注册商品ID'      # 必须和Master里的ID能对上
+KEY_S_QTY = '销售数量'       # 或者是 '销量', 'Quantity'
 
-# 3. 广告表 (Ads)
-IDX_A_NAME   = 5    # 广告活动名称(用于提取Cxx编号) (通常在 F列)
-IDX_A_SPEND  = 15   # 广告花费 (通常在 P列)
+# C. 广告表 (Ads)
+# 需要包含: 广告活动名称, 执行金额
+KEY_A_NAME = '广告活动名称'  # 用于提取产品编号
+KEY_A_SPEND = '执行金额'     # 或者是 '总花费', 'Spend'
 
 # ==========================================
 # 1. 上传区域
 # ==========================================
 with st.sidebar:
     st.header("1. 文件上传区")
-    file_master = st.file_uploader("基础信息表 (Master - 1个)", type=['csv', 'xlsx'])
-    files_sales = st.file_uploader("销售表 (Sales - 支持多个)", type=['csv', 'xlsx'], accept_multiple_files=True)
-    files_ads = st.file_uploader("广告表 (Ads - 支持多个)", type=['csv', 'xlsx'], accept_multiple_files=True)
+    file_master = st.file_uploader("基础信息表 (Master)", type=['csv', 'xlsx'])
+    files_sales = st.file_uploader("销售表 (Sales)", type=['csv', 'xlsx'], accept_multiple_files=True)
+    files_ads = st.file_uploader("广告表 (Ads)", type=['csv', 'xlsx'], accept_multiple_files=True)
 
     st.markdown("---")
     if file_master and files_sales and files_ads:
-        st.success("✅ 所有文件已上传，请去右侧点击按钮开始。")
+        st.success("✅ 文件已就绪，请去右侧开始。")
     else:
-        st.info("⏳ 等待文件上传完整...")
+        st.info("⏳ 等待文件上传...")
 
 # ==========================================
 # 2. 工具函数
 # ==========================================
 def clean_id(series):
-    """清洗ID：转字符串，去小数，去引号，去空格"""
-    return series.astype(str).str.replace(r'\.0$', '', regex=True).str.replace('"', '').str.replace('\n', '').str.strip()
+    """清洗ID：转字符串，去小数，去空格"""
+    return series.astype(str).str.replace(r'\.0$', '', regex=True).str.replace('"', '').str.strip()
 
 def clean_num(series):
     """清洗数值：转数字，无法转换的变0"""
     return pd.to_numeric(series, errors='coerce').fillna(0)
 
 def extract_product_code(text):
-    """从广告名称中提取 C01 这种编号"""
+    """
+    从广告名称中提取 C01, c12 这种编号
+    正则逻辑：寻找 C (大小写均可) + 数字
+    """
     if pd.isna(text): return None
     match = re.search(r'([Cc]\d+)', str(text))
     if match: return match.group(1).upper()
     return None
 
-def read_and_combine(file_list, file_type_name=""):
-    """读取并合并多个文件"""
-    if not file_list: return pd.DataFrame()
-    all_dfs = []
-    for file in file_list:
-        try:
-            file.seek(0)
-            if file.name.endswith('.csv'):
-                try: df = pd.read_csv(file)
-                except: file.seek(0); df = pd.read_csv(file, encoding='gbk')
-            else:
-                df = pd.read_excel(file)
-            all_dfs.append(df)
-        except Exception as e: st.error(f"❌ {file.name} 读取失败: {e}")
-    
-    if all_dfs:
-        combined = pd.concat(all_dfs, ignore_index=True)
-        # 简单去重
-        rows_before = len(combined)
-        combined.drop_duplicates(inplace=True)
-        rows_after = len(combined)
-        removed = rows_before - rows_after
-        if removed > 0: st.warning(f"⚠️ 【{file_type_name}】剔除了 {removed} 条完全重复的数据")
-        return combined
-    return pd.DataFrame()
+def read_file(file):
+    """读取文件的通用函数"""
+    try:
+        file.seek(0)
+        if file.name.endswith('.csv'):
+            try: return pd.read_csv(file)
+            except: file.seek(0); return pd.read_csv(file, encoding='gbk')
+        else:
+            return pd.read_excel(file)
+    except Exception as e:
+        st.error(f"❌ 读取失败: {file.name} - {e}")
+        return pd.DataFrame()
 
 # ==========================================
-# 3. 主界面逻辑
+# 3. 主程序
 # ==========================================
 
 if file_master and files_sales and files_ads:
-    
     st.divider()
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader("📂 文件状态确认")
-        st.write(f"• 基础表：1 个")
-        st.write(f"• 销售表：{len(files_sales)} 个 (待合并)")
-        st.write(f"• 广告表：{len(files_ads)} 个 (待合并)")
     
-    with col2:
-        st.write("##")
-        start_btn = st.button("🚀 点击开始计算", type="primary", use_container_width=True)
-
-    if start_btn:
+    if st.button("🚀 点击开始计算", type="primary", use_container_width=True):
         st.divider()
-        with st.status("🔄 正在全速计算中...", expanded=True):
+        with st.status("🔄 正在计算中...", expanded=True):
             try:
                 # -------------------------------------------------------
-                # A. Master (基础表处理)
+                # A. 处理 Master (基础表)
                 # -------------------------------------------------------
-                st.write("1. 正在读取基础表并锁定列位置...")
-                if file_master.name.endswith('.csv'): df_master = pd.read_csv(file_master)
-                else: df_master = pd.read_excel(file_master)
+                st.write("1. 读取基础表...")
+                df_master = read_file(file_master)
                 
-                # 【优化点】使用配置区的常量读取列
-                df_master['__ORDER__'] = range(len(df_master)) # 保留原始顺序
+                # 检查列名是否存在
+                missing_cols = [col for col in [KEY_M_SKU, KEY_M_PROFIT, KEY_M_CODE] if col not in df_master.columns]
+                if missing_cols:
+                    st.error(f"❌ 基础表中找不到这些列名: {missing_cols}")
+                    st.stop()
                 
-                # 锁定关键列的数据
-                raw_col_code = df_master.iloc[:, IDX_M_CODE]
-                raw_col_sku  = df_master.iloc[:, IDX_M_SKU]
-                raw_col_profit = df_master.iloc[:, IDX_M_PROFIT]
+                df_master['__ORDER__'] = range(len(df_master))
+                df_master['关联ID'] = clean_id(df_master[KEY_M_SKU])
+                df_master['单件毛利'] = clean_num(df_master[KEY_M_PROFIT])
+                df_master['产品编号_清洗'] = clean_id(df_master[KEY_M_CODE]).str.upper() # 这里如果是"注册商品名称"，通常里面包含了C01
 
-                df_master['关联ID'] = clean_id(raw_col_sku)
-                df_master['单件毛利'] = clean_num(raw_col_profit)
-                df_master['产品编号_清洗'] = clean_id(raw_col_code).str.upper()
-
-                # -------------------------------------------------------
-                # B. Sales (销售表处理)
-                # -------------------------------------------------------
-                st.write("2. 正在合并销售数据...")
-                df_sales_all = read_and_combine(files_sales, "销售表")
-                
-                # 锁定关键列
-                raw_sale_id = df_sales_all.iloc[:, IDX_S_ID]
-                raw_sale_qty = df_sales_all.iloc[:, IDX_S_QTY]
-
-                df_sales_all['关联ID'] = clean_id(raw_sale_id)
-                df_sales_all['销量'] = clean_num(raw_sale_qty)
-                
-                sales_agg = df_sales_all.groupby('关联ID')['销量'].sum().reset_index()
-                sales_agg.rename(columns={'销量': 'O列_合并销量'}, inplace=True)
+                # 如果编号在"注册商品名称"里混着，尝试提取一下
+                # 如果你的基础表有一列专门叫"产品编号"，可以不用这一步
+                if '产品编号_清洗' not in df_master.columns or df_master['产品编号_清洗'].iloc[0] == '':
+                     df_master['产品编号_清洗'] = df_master[KEY_M_CODE].apply(extract_product_code)
 
                 # -------------------------------------------------------
-                # C. Ads (广告表处理)
+                # B. 处理 Sales (销售表)
                 # -------------------------------------------------------
-                st.write("3. 正在匹配广告花费...")
-                df_ads_all = read_and_combine(files_ads, "广告表")
+                st.write("2. 合并销售数据...")
+                all_sales = []
+                for f in files_sales:
+                    df = read_file(f)
+                    if not df.empty:
+                        # 兼容不同列名 (如果有时候是 '销量', 有时候是 '销售数量')
+                        if KEY_S_QTY not in df.columns and '销量' in df.columns:
+                            df.rename(columns={'销量': KEY_S_QTY}, inplace=True)
+                            
+                        if KEY_S_ID in df.columns and KEY_S_QTY in df.columns:
+                            all_sales.append(df)
+                        else:
+                            st.warning(f"⚠️ 文件 {f.name} 缺少 '{KEY_S_ID}' 或 '{KEY_S_QTY}' 列，已跳过")
                 
-                # 锁定关键列
-                raw_ad_name = df_ads_all.iloc[:, IDX_A_NAME]
-                raw_ad_spend = df_ads_all.iloc[:, IDX_A_SPEND]
+                if all_sales:
+                    df_sales_all = pd.concat(all_sales, ignore_index=True)
+                    df_sales_all['关联ID'] = clean_id(df_sales_all[KEY_S_ID])
+                    df_sales_all['销量'] = clean_num(df_sales_all[KEY_S_QTY])
+                    sales_agg = df_sales_all.groupby('关联ID')['销量'].sum().reset_index()
+                    sales_agg.rename(columns={'销量': 'O列_合并销量'}, inplace=True)
+                else:
+                    sales_agg = pd.DataFrame(columns=['关联ID', 'O列_合并销量'])
 
-                df_ads_all['提取编号'] = raw_ad_name.apply(extract_product_code)
-                df_ads_all['含税广告费'] = clean_num(raw_ad_spend) * 1.1 # 加上10%税点
+                # -------------------------------------------------------
+                # C. 处理 Ads (广告表)
+                # -------------------------------------------------------
+                st.write("3. 匹配广告花费...")
+                all_ads = []
+                for f in files_ads:
+                    df = read_file(f)
+                    if not df.empty:
+                        # 检查列名
+                        if KEY_A_NAME in df.columns and KEY_A_SPEND in df.columns:
+                            all_ads.append(df)
+                        else:
+                            st.warning(f"⚠️ 广告表 {f.name} 缺少 '{KEY_A_NAME}' 或 '{KEY_A_SPEND}'，已跳过")
+
+                if all_ads:
+                    df_ads_all = pd.concat(all_ads, ignore_index=True)
+                    # 提取编号
+                    df_ads_all['提取编号'] = df_ads_all[KEY_A_NAME].apply(extract_product_code)
+                    # 计算含税 (10%)
+                    df_ads_all['含税广告费'] = clean_num(df_ads_all[KEY_A_SPEND]) * 1.1
+                    
+                    ads_agg = df_ads_all.groupby('提取编号')['含税广告费'].sum().reset_index()
+                    ads_agg.rename(columns={'提取编号': '产品编号_清洗', '含税广告费': 'R列_产品总广告费'}, inplace=True)
+                else:
+                    ads_agg = pd.DataFrame(columns=['产品编号_清洗', 'R列_产品总广告费'])
+
+                # -------------------------------------------------------
+                # D. 合并计算
+                # -------------------------------------------------------
+                st.write("4. 生成最终报表...")
                 
-                ads_agg = df_ads_all.groupby('提取编号')['含税广告费'].sum().reset_index()
-                ads_agg.rename(columns={'提取编号': '产品编号_清洗', '含税广告费': 'R列_产品总广告费'}, inplace=True)
-
-                # -------------------------------------------------------
-                # D. Merge (合并计算)
-                # -------------------------------------------------------
-                st.write("4. 正在生成最终报表...")
+                # 1. 基础表 + 销量
                 df_final = pd.merge(df_master, sales_agg, on='关联ID', how='left')
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
+                
+                # 2. 算SKU毛利
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['单件毛利']
                 
-                # 计算产品维度的总利润
+                # 3. 算产品总利润 (按清洗后的编号汇总)
+                # 注意：如果提取不到编号，这里会是空的
                 df_final['Q列_产品总利润'] = df_final.groupby('产品编号_清洗')['P列_SKU总毛利'].transform('sum')
                 
-                # 匹配广告费
+                # 4. 减去广告费 (按清洗后的编号匹配)
                 df_final = pd.merge(df_final, ads_agg, on='产品编号_清洗', how='left')
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 
-                # 最终净利
+                # 5. 最终净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # 恢复排序并清理中间列
+                # 清理
                 df_final.sort_values(by=['__ORDER__'], inplace=True)
-                cols_to_drop = ['__ORDER__', '关联ID', '单件毛利', '产品编号_清洗', '提取编号']
-                df_final.drop(columns=[c for c in cols_to_drop if c in df_final.columns], inplace=True, errors='ignore')
+                keep_cols = [c for c in df_final.columns if c not in ['__ORDER__', '关联ID', '单件毛利', '提取编号']]
+                df_final = df_final[keep_cols]
 
                 # -------------------------------------------------------
-                # E. Excel Output (保留你的样式代码)
+                # E. 导出 Excel
                 # -------------------------------------------------------
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     wb = writer.book
                     
-                    # Sheet 1: 明细
-                    df_final.to_excel(writer, index=False, sheet_name='1_超级数据源')
-                    ws1 = writer.sheets['1_超级数据源']
-                    (mr, mc) = df_final.shape
-                    # 注意：这里 header 需要转 string 防止报错
-                    cols_settings = [{'header': str(c)} for c in df_final.columns]
-                    ws1.add_table(0, 0, mr, mc-1, {'columns': cols_settings, 'name': 'Data', 'style': 'TableStyleMedium9'})
-                    ws1.set_column(0, mc-1, 15)
+                    # Sheet 1
+                    df_final.to_excel(writer, index=False, sheet_name='Result')
+                    ws = writer.sheets['Result']
+                    
+                    # 简单样式
+                    fmt_header = wb.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1})
+                    for col_num, value in enumerate(df_final.columns.values):
+                        ws.write(0, col_num, str(value), fmt_header)
+                    ws.set_column(0, len(df_final.columns)-1, 15)
 
-                    # Sheet 2: 老板视图
-                    df_final.to_excel(writer, index=False, sheet_name='2_老板视图')
-                    ws2 = writer.sheets['2_老板视图']
-                    
-                    merge_fmt = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'fg_color': '#FFFFFF'})
-                    green_fmt = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#C6EFCE', 'font_color': '#006100'})
-                    red_fmt = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
-                    
-                    ws2.set_column('A:A', 15)
-                    cols_list = df_final.columns.tolist()
-                    
-                    # 动态寻找列索引 (防止列位置变动导致写入错位)
-                    idx_A = 0
-                    idx_Q = cols_list.index('Q列_产品总利润') if 'Q列_产品总利润' in cols_list else -1
-                    idx_R = cols_list.index('R列_产品总广告费') if 'R列_产品总广告费' in cols_list else -1
-                    idx_S = cols_list.index('S列_最终净利润') if 'S列_最终净利润' in cols_list else -1
-
-                    # 你的原始合并逻辑
-                    start_row = 1
-                    codes = df_final.iloc[:, 0].astype(str).tolist()
-                    q_vals = df_final['Q列_产品总利润'].tolist()
-                    r_vals = df_final['R列_产品总广告费'].tolist()
-                    s_vals = df_final['S列_最终净利润'].tolist()
-
-                    for i in range(1, len(codes) + 1):
-                        if i == len(codes) or codes[i] != codes[i-1]:
-                            profit = s_vals[start_row-1]
-                            s_fmt = green_fmt if profit >= 0 else red_fmt
-                            cnt = i - start_row
-                            
-                            if cnt > 1:
-                                ws2.merge_range(start_row, idx_A, i, idx_A, codes[start_row-1], merge_fmt)
-                                if idx_Q >= 0: ws2.merge_range(start_row, idx_Q, i, idx_Q, q_vals[start_row-1], merge_fmt)
-                                if idx_R >= 0: ws2.merge_range(start_row, idx_R, i, idx_R, r_vals[start_row-1], merge_fmt)
-                                if idx_S >= 0: ws2.merge_range(start_row, idx_S, i, idx_S, profit, s_fmt)
-                            else:
-                                ws2.write(start_row, idx_A, codes[start_row-1], merge_fmt)
-                                if idx_Q >= 0: ws2.write(start_row, idx_Q, q_vals[start_row-1], merge_fmt)
-                                if idx_R >= 0: ws2.write(start_row, idx_R, r_vals[start_row-1], merge_fmt)
-                                if idx_S >= 0: ws2.write(start_row, idx_S, profit, s_fmt)
-                            start_row = i + 1
-                    
-                st.success("✅ 计算完成！")
-                st.download_button("📥 下载结果报表", output.getvalue(), "Coupang_Final_Result.xlsx", "application/vnd.ms-excel", type='primary')
+                st.success("✅ 计算成功！")
+                st.download_button("📥 下载结果报表", output.getvalue(), "Coupang_Result.xlsx", "application/vnd.ms-excel", type='primary')
 
             except Exception as e:
-                st.error(f"发生错误: {e}")
-                st.error("💡 建议检查：上传的表格列顺序是否发生了变化？请核对代码最上方的配置区列号。")
+                st.error(f"❌ 运行出错: {e}")
+                st.info("💡 建议检查：上传的表格里，表头名字是不是改了？请看代码最上面的【配置区】。")
 
 else:
-    st.info("👈 请在左侧上传文件：1个基础表 + 多个销售/广告表。上传完成后，此处会出现开始按钮。")
+    st.info("👈 请上传文件")
