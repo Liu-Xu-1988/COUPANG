@@ -6,14 +6,16 @@ import re
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 利润核算 (精修版)")
-st.title("🎨 步骤五：利润核算 (最终精修版)")
+st.set_page_config(layout="wide", page_title="Coupang 利润核算 (最终定稿版)")
+st.title("📊 最终定稿：双表输出 (Sheet1保留原样 + Sheet2看板)")
 st.markdown("""
-### 🛡️ 优化细节：
-1.  **0值处理**：净利润为 0 时不显示颜色，保持表格整洁。
-2.  **自动列宽**：列宽自动根据内容调整，避免过宽或过窄，一眼看全数据。
-3.  **样式保留**：首行冻结 + 微软雅黑加粗 + 深灰斑马纹。
-""", unsafe_allow_html=True)
+### 📝 输出说明：
+1.  **Sheet 1 (利润分析)**：完全保持之前的格式、顺序和样式（斑马纹、自动列宽）。
+2.  **Sheet 2 (业务看板)**：
+    * 仅提取 **A列, Q列, R列, S列**。
+    * **顺序严格跟随 Sheet1** (即基础表顺序)，不做额外排序。
+    * 样式：大字体 + 净利润数据条。
+""")
 
 # --- 列号配置 ---
 IDX_M_CODE   = 0    # A列
@@ -59,9 +61,7 @@ def read_file_strict(file):
         file.seek(0)
         return pd.read_csv(file, dtype=str, encoding='gbk')
 
-# 计算字符宽度的辅助函数 (粗略估算)
 def get_col_width(series):
-    # 计算每行字符长度，中文按2个字符算可能更准，这里简单用len
     max_len = series.astype(str).map(len).max()
     return max_len
 
@@ -70,13 +70,16 @@ def get_col_width(series):
 # ==========================================
 if file_master and file_sales and file_ads:
     st.divider()
-    if st.button("🚀 开始计算 (自动调整列宽)", type="primary", use_container_width=True):
+    if st.button("🚀 生成最终报表", type="primary", use_container_width=True):
         try:
-            with st.status("🔄 正在计算... (正在适配列宽...)", expanded=True):
+            with st.status("🔄 正在计算...", expanded=True):
                 # --------------------------------------------
-                # Step A-D: 读取与计算 (逻辑不变)
+                # 计算逻辑 (完全保持原样)
                 # --------------------------------------------
                 df_master = read_file_strict(file_master)
+                # 记录一下 A 列的原始列名，后面 Sheet2 要用
+                col_code_name = df_master.columns[IDX_M_CODE]
+
                 df_master['_MATCH_SKU'] = clean_for_match(df_master.iloc[:, IDX_M_SKU])
                 df_master['_MATCH_CODE'] = clean_for_match(df_master.iloc[:, IDX_M_CODE])
                 df_master['_VAL_PROFIT'] = clean_num(df_master.iloc[:, IDX_M_PROFIT])
@@ -103,50 +106,53 @@ if file_master and file_sales and file_ads:
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # 清理
+                # --------------------------------------------
+                # 关键步骤：在删除辅助列之前，提取 Sheet2 数据
+                # --------------------------------------------
+                # 1. 提取需要的 4 列：A列(原始名), Q列, R列, S列
+                # 注意：keep='first' 确保了顺序严格跟随 Sheet1 (Master表) 的顺序
+                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润']].copy()
+                df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
+                
+                # 2. 清理 Sheet1 的辅助列 (保持原代码逻辑)
                 cols_to_drop = [c for c in df_final.columns if c.startswith('_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
                 # --------------------------------------------
-                # Step E: 输出 Excel (样式精修)
+                # Step E: 输出 Excel
                 # --------------------------------------------
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    
+                    # ========================================
+                    # Sheet 1: 利润分析 (代码完全保留，不做修改)
+                    # ========================================
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
                     wb = writer.book
                     ws = writer.sheets['利润分析']
                     
-                    # 样式对象
+                    # 样式对象 (保持原样)
                     base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                     fmt_row_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                     fmt_row_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
-                    
-                    # 盈亏样式 (仅背景色不同)
-                    fmt_s_profit = wb.add_format(dict(base_font, bg_color='#C6EFCE')) # 绿
-                    fmt_s_loss = wb.add_format(dict(base_font, bg_color='#FFC7CE'))   # 红
+                    fmt_s_profit = wb.add_format(dict(base_font, bg_color='#C6EFCE'))
+                    fmt_s_loss = wb.add_format(dict(base_font, bg_color='#FFC7CE'))
 
-                    # === 自动列宽调整 ===
-                    # 遍历每一列，计算最大内容长度，并设置宽度
+                    # 自动列宽循环 (保持原样)
                     for i, col in enumerate(df_final.columns):
-                        # 获取该列最长内容的长度
                         max_len = get_col_width(df_final[col])
-                        # 表头长度也要考虑
-                        header_len = len(str(col)) * 1.5 # 中文表头稍微加权
-                        
-                        # 最终宽度：取内容和表头的最大值，稍微加点余量
+                        header_len = len(str(col)) * 1.5
                         final_width = max(max_len, header_len) + 2
-                        
-                        # 限制一下最大宽度，防止描述列太宽撑爆屏幕
                         if final_width > 50: final_width = 50
-                        if final_width < 10: final_width = 10 # 最小宽度
-                        
+                        if final_width < 10: final_width = 10
                         ws.set_column(i, i, final_width)
 
-                    # === 冻结首行 ===
                     ws.freeze_panes(1, 0)
 
-                    # === 智能着色 ===
-                    col_code_idx = IDX_M_CODE
+                    # 智能着色循环 (保持原样)
+                    # 需要重新获取 Code 列和 Profit 列的索引，因为 drop 之后位置可能变了，但逻辑不变
+                    # 原逻辑是依赖 col_code_idx = IDX_M_CODE (0)
+                    col_code_idx = IDX_M_CODE 
                     cols_list = df_final.columns.tolist()
                     col_profit_idx = cols_list.index('S列_最终净利润') if 'S列_最终净利润' in cols_list else -1
 
@@ -156,14 +162,11 @@ if file_master and file_sales and file_ads:
                     is_grey = False
                     for i in range(len(raw_codes)):
                         excel_row = i + 1
-                        # 切换斑马纹
                         if i > 0 and clean_codes[i] != clean_codes[i-1]:
                             is_grey = not is_grey
                         
-                        # 应用行样式
                         ws.set_row(excel_row, None, fmt_row_grey if is_grey else fmt_row_white)
                         
-                        # 单独处理 S列
                         if col_profit_idx != -1:
                             val = df_final.iloc[i, col_profit_idx]
                             try:
@@ -171,18 +174,44 @@ if file_master and file_sales and file_ads:
                             except:
                                 num_val = 0
                             
-                            # 逻辑修改：只有不等于0才上色
                             if num_val > 0:
                                 ws.write(excel_row, col_profit_idx, val, fmt_s_profit)
                             elif num_val < 0:
                                 ws.write(excel_row, col_profit_idx, val, fmt_s_loss)
                             else:
-                                # 等于0，保持该行的原样 (什么都不做，或者显式写回去以防万一)
-                                # 为了稳妥，用当前行的默认格式把值写回去
                                 ws.write(excel_row, col_profit_idx, val, fmt_row_grey if is_grey else fmt_row_white)
 
-            st.success("✅ 报表生成！列宽已自动适配，0值显示已优化。")
-            st.download_button("📥 下载精修版报表", output.getvalue(), "Coupang_Perfect_Report.xlsx")
+                    # ========================================
+                    # Sheet 2: 业务报表 (新增)
+                    # ========================================
+                    df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
+                    ws2 = writer.sheets['业务报表']
+                    
+                    # 样式设置
+                    fmt_header2 = wb.add_format({'font_name': 'Microsoft YaHei', 'bold': True, 'font_size': 12, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                    fmt_body2 = wb.add_format({'font_name': 'Microsoft YaHei', 'font_size': 11, 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+                    fmt_money2 = wb.add_format({'font_name': 'Microsoft YaHei', 'font_size': 11, 'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0'})
+                    
+                    # 设置表头
+                    for col_num, value in enumerate(df_sheet2.columns.values):
+                        ws2.write(0, col_num, value, fmt_header2)
+                    
+                    # 设置列宽
+                    ws2.set_column(0, 0, 25, fmt_body2) # A列 产品编号
+                    ws2.set_column(1, 3, 18, fmt_money2) # 钱列
+                    ws2.freeze_panes(1, 0)
+                    
+                    # 数据条 (Data Bar) - 仅给净利润 (第4列, 索引3)
+                    (max_r2, max_c2) = df_sheet2.shape
+                    ws2.conditional_format(1, 3, max_r2, 3, {
+                        'type': 'data_bar',
+                        'bar_color': '#63C384',
+                        'bar_negative_color': '#FF0000',
+                        'bar_axis_position': 'middle'
+                    })
+
+            st.success("✅ 报表生成成功！Sheet1 保持原样，Sheet2 已按顺序生成。")
+            st.download_button("📥 下载最终报表", output.getvalue(), "Coupang_Final_Report_v2.xlsx")
 
         except Exception as e:
             st.error(f"❌ 错误: {e}")
