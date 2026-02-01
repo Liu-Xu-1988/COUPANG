@@ -104,6 +104,7 @@ else:
     filters_applied = []
     if filter_code: filters_applied.append(f"编号:{filter_code}")
     if filter_profit != "全部显示": filters_applied.append(f"{filter_profit}")
+    
     if filters_applied:
         btn_label += f" (筛选: {' + '.join(filters_applied)})"
     
