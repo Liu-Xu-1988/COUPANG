@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import io
 import re
-import numpy as np  # 引入numpy用于快速计算斑马纹
 
 # ==========================================
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能版+双库存+可视化斑马纹)")
+st.title("📊 Coupang 经营分析看板 (全功能版+双库存+SKU销量)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -81,7 +80,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    if st.button("🚀 生成报表 (含可视化斑马纹)", type="primary", use_container_width=True):
+    if st.button("🚀 生成报表 (更新O列与库存分析)", type="primary", use_container_width=True):
         try:
             with st.spinner("正在全速处理数据..."):
                 
@@ -166,8 +165,7 @@ if file_master and files_sales and files_ads:
 
                 # --- Step 6: 报表生成 ---
                 
-                # Sheet2: 业务报表 (产品级汇总)
-                # 汇总库存到产品维度
+                # Sheet2: 业务报表
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
 
@@ -190,17 +188,22 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
-                # Sheet3: 库存分析 (SKU级明细)
-                cols_master_AM = df_final.columns[:13].tolist() 
-                df_sheet3 = df_final[cols_master_AM + ['火箭仓库存', '极风库存']].copy()
-                df_sheet3.rename(columns={'火箭仓库存': '火箭仓库存数量'}, inplace=True)
-
-                # --- Step 7: 清理 ---
+                # --- Step 7: 清理 & 重命名 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_') or c.startswith('产品_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
+                
+                # 【修改点1】将 O列_合并销量 更名为 SKU销量
+                df_final.rename(columns={'O列_合并销量': 'SKU销量'}, inplace=True)
+
+                # Sheet3: 库存分析
+                # 【修改点2】构造库存分析表：包含 Master信息 + 火箭 + 极风 + SKU销量
+                cols_master_AM = df_final.columns[:13].tolist() 
+                # 这里的 'SKU销量' 就是改名后的原 O列
+                df_sheet3 = df_final[cols_master_AM + ['火箭仓库存', '极风库存', 'SKU销量']].copy()
+                df_sheet3.rename(columns={'火箭仓库存': '火箭仓库存数量'}, inplace=True)
 
                 # ==========================================
-                # 🔥 看板展示 (含可视化斑马纹)
+                # 🔥 看板展示
                 # ==========================================
                 
                 total_qty = df_sheet2['产品总销量'].sum()
@@ -216,12 +219,11 @@ if file_master and files_sales and files_ads:
 
                 st.divider()
 
-                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)", "🏭 3. 库存分析 (明细)"])
+                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (SKU明细)", "📊 2. 业务报表 (产品汇总)", "🏭 3. 库存分析 (SKU明细)"])
                 
-                # --- 可视化样式函数 (斑马纹+高亮) ---
+                # --- 可视化样式函数 ---
                 def apply_visual_style(df, cols_to_color, is_sheet2=False):
                     try:
-                        # 1. 基础格式化
                         styler = df.style.format(precision=0)
                         if is_sheet2:
                             styler = styler.format({
@@ -229,35 +231,21 @@ if file_master and files_sales and files_ads:
                                 '产品总销量': '{:,.0f}', '产品广告销量': '{:,.0f}', '自然销量': '{:,.0f}'
                             })
 
-                        # 2. 斑马纹逻辑 (基于第一列 Code 变化)
                         def zebra_rows(x):
-                            # x 是整个 dataframe
-                            # 获取第一列(Code)
                             codes = x.iloc[:, 0].astype(str)
-                            # 识别组变化: A, A, B, B -> 0, 0, 1, 1
                             groups = (codes != codes.shift()).cumsum()
-                            # 奇数组设为浅灰色
                             is_odd = groups % 2 != 0
-                            
-                            # 构建全表样式
-                            # Streamlit 默认背景是白色(亮色模式)，我们用浅灰 #f0f2f6 做交替
                             styles = pd.DataFrame('', index=x.index, columns=x.columns)
-                            # 广播赋值
                             styles.loc[is_odd, :] = 'background-color: #f0f2f6' 
                             return styles
                         
                         styler = styler.apply(zebra_rows, axis=None)
-
-                        # 3. 叠加盈亏高亮 (这会覆盖掉上面的斑马纹背景，只针对特定列)
                         styler = styler.background_gradient(subset=cols_to_color, cmap='RdYlGn', vmin=-10000, vmax=10000)
-                        
                         return styler
-                    except Exception as e:
-                        # 降级处理
-                        return df
+                    except: return df
 
                 with tab1:
-                    st.caption("利润明细 (Sheet1) - 已应用产品斑马纹")
+                    st.caption("利润明细 (Sheet1) - O列已更名为：SKU销量")
                     st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                 
                 with tab2:
@@ -265,12 +253,12 @@ if file_master and files_sales and files_ads:
                     st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3)")
-                    # 对于库存表，我们不仅加斑马纹，还加数据条
+                    st.caption("库存分析 (Sheet3) - 新增最后一列：SKU销量")
                     try:
-                        st_inv = apply_visual_style(df_sheet3, []) # 不传排序列，只应用斑马纹
-                        # 叠加数据条
-                        st_inv = st_inv.bar(subset=['火箭仓库存数量'], color='#5fba7d').bar(subset=['极风库存'], color='#4472c4')
+                        st_inv = apply_visual_style(df_sheet3, []) 
+                        st_inv = st_inv.bar(subset=['火箭仓库存数量'], color='#5fba7d')\
+                                       .bar(subset=['极风库存'], color='#4472c4')\
+                                       .bar(subset=['SKU销量'], color='#ffaa00') # 销量用橙色条
                         st.dataframe(st_inv, use_container_width=True, height=600)
                     except:
                         st.dataframe(df_sheet3, use_container_width=True)
@@ -325,7 +313,7 @@ if file_master and files_sales and files_ads:
                 st.download_button(
                     label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                     data=output.getvalue(),
-                    file_name="Coupang_Full_Report_Visual.xlsx",
+                    file_name="Coupang_Full_Report_v7.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
