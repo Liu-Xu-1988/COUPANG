@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (最终版·精度优化)")
+st.title("📊 Coupang 经营分析看板 (完美精度版)")
 
 # --- 列号配置 ---
 IDX_M_CODE   = 0    # A列: 内部编码
@@ -106,7 +106,7 @@ else:
         try:
             with st.spinner("正在全速计算中..."):
                 
-                # --- Step 1: 基础表 ---
+                # --- Step 1-5: 数据处理 ---
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
 
@@ -117,7 +117,6 @@ else:
                 df_calc['_VAL_PROFIT'] = clean_num(df_calc.iloc[:, IDX_M_PROFIT])
                 df_calc['_VAL_COST'] = clean_num(df_calc.iloc[:, IDX_M_COST])
 
-                # --- Step 2: 销售表 ---
                 sales_list = [read_file_strict(f) for f in files_sales]
                 df_sales_all = pd.concat(sales_list, ignore_index=True)
                 df_sales_all['_MATCH_SKU'] = clean_for_match(df_sales_all.iloc[:, IDX_S_ID])
@@ -125,7 +124,6 @@ else:
                 sales_agg = df_sales_all.groupby('_MATCH_SKU')['销量'].sum().reset_index()
                 sales_agg.rename(columns={'销量': 'SKU销量'}, inplace=True) 
 
-                # --- Step 3: 广告表 ---
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
                 df_ads_all['含税广告费'] = clean_num(df_ads_all.iloc[:, IDX_A_SPEND]) * 1.1
@@ -137,7 +135,6 @@ else:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
-                # --- Step 4: 库存表 ---
                 if files_inv:
                     inv_list = [read_file_strict(f) for f in files_inv]
                     df_inv_all = pd.concat(inv_list, ignore_index=True)
@@ -156,13 +153,10 @@ else:
                 else:
                     inv_j_agg = pd.DataFrame(columns=['_MATCH_BAR', '极风库存'])
 
-                # --- Step 5: 计算 ---
                 df_final = pd.merge(df_calc, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['SKU销量'] = df_final['SKU销量'].fillna(0).astype(int)
-                
                 df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['火箭仓库存'] = df_final['火箭仓库存'].fillna(0).astype(int)
-                
                 df_final = pd.merge(df_final, inv_j_agg, on='_MATCH_BAR', how='left', sort=False)
                 df_final['极风库存'] = df_final['极风库存'].fillna(0).astype(int)
 
@@ -172,8 +166,8 @@ else:
                 
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 
-                # 【修改点】产品总广告费：填充0 -> 四舍五入取整
-                df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0).round(0)
+                # 【关键修复】直接转为 int 类型，消灭小数点
+                df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0).round(0).astype(int)
                 
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
@@ -271,9 +265,7 @@ else:
                     df_sheet3 = df_sheet3.loc[df_sheet3.index.isin(valid_indices)]
                     df_sheet2 = df_sheet2[df_sheet2['最终净利润'] < 0]
 
-                # ==========================================
-                # 🔥 关键修改：插入序号列 (业务报表)
-                # ==========================================
+                # 插入序号列
                 df_sheet2.reset_index(drop=True, inplace=True)
                 idx_col_name = f"产品总数({len(df_sheet2)})"
                 df_sheet2.insert(0, idx_col_name, range(1, len(df_sheet2) + 1))
@@ -319,7 +311,8 @@ else:
                         format_dict = {}
                         for col in df.columns:
                             c_str = str(col)
-                            if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数']):
+                            # 【关键修正】加入 '广告费' 关键字
+                            if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
                                 if '率' not in c_str and '比' not in c_str:
                                     format_dict[col] = safe_fmt_int
                             elif any(x in c_str for x in ['比', '率', '占比']):
@@ -421,7 +414,7 @@ else:
                                 c_str = str(col)
                                 width = 12
                                 cell_fmt = None
-                                if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数']):
+                                if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
                                     if '率' not in c_str and '比' not in c_str:
                                         cell_fmt = fmt_int
                                         width = 15
