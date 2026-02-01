@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能·强力容错版)")
+st.title("📊 Coupang 经营分析看板 (全功能·利润筛选版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -41,7 +41,17 @@ IDX_I_J_QTY  = 10   # K列: 数值
 # ==========================================
 with st.sidebar:
     st.header("🔍 数据筛选")
+    
+    # 1. 编号筛选
     filter_code = st.text_input("输入产品编号 (如 C123)", placeholder="留空则显示全部...").strip().upper()
+    
+    # 2. 利润筛选 (新增功能)
+    st.write("") # 空行间隔
+    filter_profit = st.radio(
+        "💰 利润筛选 (最终净利润)",
+        ("全部显示", "只看盈利 (>0)", "只看亏损 (<0)"),
+        index=0
+    )
     
     st.divider()
     
@@ -86,9 +96,14 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    btn_label = "🚀 生成强力容错报表"
-    if filter_code:
-        btn_label += f" (筛选: {filter_code})"
+    # 动态生成按钮文字
+    btn_label = "🚀 生成报表"
+    filters_applied = []
+    if filter_code: filters_applied.append(f"编号:{filter_code}")
+    if filter_profit != "全部显示": filters_applied.append(f"{filter_profit}")
+    
+    if filters_applied:
+        btn_label += f" (筛选: {' + '.join(filters_applied)})"
     
     if st.button(btn_label, type="primary", use_container_width=True):
         try:
@@ -236,18 +251,38 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet3 = df_final[cols_inv_final].copy()
 
-                # --- Step 8: 筛选 ---
+                # ==========================================
+                # 🔍 Step 8: 执行筛选 (双重逻辑)
+                # ==========================================
+                
+                # 1. 编号筛选
                 if filter_code:
                     df_final = df_final[df_final[col_code_name].astype(str).str.contains(filter_code, na=False)]
                     df_sheet2 = df_sheet2[df_sheet2[col_code_name].astype(str).str.contains(filter_code, na=False)]
                     df_sheet3 = df_sheet3[df_sheet3[col_code_name].astype(str).str.contains(filter_code, na=False)]
+
+                # 2. 利润筛选 (新增逻辑)
+                # S列_最终净利润 存在于 df_final 和 df_sheet2 中
+                # df_sheet3 与 df_final 行对应，使用布尔掩码进行同步筛选
+                
+                if filter_profit == "只看盈利 (>0)":
+                    mask_profit = df_final['S列_最终净利润'] > 0
+                    df_final = df_final[mask_profit]
+                    df_sheet3 = df_sheet3[mask_profit] # 同步筛选
+                    df_sheet2 = df_sheet2[df_sheet2['S列_最终净利润'] > 0]
+                    
+                elif filter_profit == "只看亏损 (<0)":
+                    mask_loss = df_final['S列_最终净利润'] < 0
+                    df_final = df_final[mask_loss]
+                    df_sheet3 = df_sheet3[mask_loss] # 同步筛选
+                    df_sheet2 = df_sheet2[df_sheet2['S列_最终净利润'] < 0]
 
                 # ==========================================
                 # 🔥 看板展示
                 # ==========================================
                 
                 if df_sheet2.empty:
-                    st.warning(f"⚠️ 未找到包含 '{filter_code}' 的产品。")
+                    st.warning(f"⚠️ 筛选结果为空。")
                 else:
                     total_qty = df_sheet2['产品总销量'].sum()
                     net_profit = df_sheet2['S列_最终净利润'].sum()
@@ -255,9 +290,21 @@ if file_master and files_sales and files_ads:
                     dead_stock_value = df_sheet3['滞销库存货值'].sum()
                     total_restock = df_sheet3['待补数量'].sum()
                     
-                    st.subheader(f"📈 经营概览 {'(筛选结果)' if filter_code else ''}")
+                    # 动态标题
+                    title_suffix = ""
+                    if filter_code: title_suffix += f" [编号:{filter_code}]"
+                    if filter_profit != "全部显示": title_suffix += f" [{filter_profit}]"
+                    
+                    st.subheader(f"📈 经营概览 {title_suffix}")
+                    
                     k1, k2, k3, k4, k5 = st.columns(5)
-                    k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
+                    
+                    # 根据盈利/亏损 改变颜色
+                    profit_color = "normal"
+                    if net_profit > 0: profit_color = "normal" 
+                    else: profit_color = "inverse" # 亏损时红色醒目
+                    
+                    k1.metric("💰 最终净利润", f"{net_profit:,.0f}", delta_color=profit_color)
                     k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
                     k3.metric("🏭 库存总货值", f"¥ {inv_value_total:,.0f}")
                     k4.metric("🔴 滞销资金占用", f"¥ {dead_stock_value:,.0f}", delta="需重点清理", delta_color="inverse")
@@ -282,23 +329,20 @@ if file_master and files_sales and files_ads:
                         except:
                             return str(x)
 
-                    # 动态生成格式化字典，但传入函数而不是字符串
+                    # 动态生成格式化字典
                     def get_format_dict(df):
                         format_dict = {}
                         for col in df.columns:
                             c_str = str(col)
-                            # 整数类
                             if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补']):
                                 if '率' not in c_str and '比' not in c_str:
                                     format_dict[col] = safe_fmt_int
-                            # 百分比类
                             elif any(x in c_str for x in ['比', '率', '占比']):
                                 format_dict[col] = safe_fmt_pct
                         return format_dict
 
                     def apply_visual_style(df, cols_to_color, is_sheet2=False):
                         try:
-                            # 使用安全的格式化字典
                             styler = df.style.format(get_format_dict(df))
                             
                             def zebra_rows(x):
@@ -353,7 +397,7 @@ if file_master and files_sales and files_ads:
                         except: return df
 
                     with tab1:
-                        st.caption("利润明细 (Sheet1) - 智能容错格式化")
+                        st.caption("利润明细 (Sheet1)")
                         st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                     
                     with tab2:
@@ -372,7 +416,7 @@ if file_master and files_sales and files_ads:
                             st.dataframe(df_sheet3, use_container_width=True)
 
                     # ==========================================
-                    # 📥 下载逻辑
+                    # 📥 下载逻辑 (Excel 格式精细化)
                     # ==========================================
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -386,7 +430,6 @@ if file_master and files_sales and files_ads:
                         fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                         
-                        # 斑马纹
                         base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                         fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                         fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
@@ -423,12 +466,27 @@ if file_master and files_sales and files_ads:
                         set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
 
                     st.divider()
-                    st.success(f"✅ 报表生成完毕！{' (已应用筛选: ' + filter_code + ')' if filter_code else ''}")
                     
+                    # 动态提示信息
+                    filter_msg = []
+                    if filter_code: filter_msg.append(f"编号 '{filter_code}'")
+                    if filter_profit != "全部显示": filter_msg.append(f"模式 '{filter_profit}'")
+                    
+                    msg = "✅ 报表生成完毕！"
+                    if filter_msg:
+                        msg += f" (当前已筛选: {' + '.join(filter_msg)})"
+                        
+                    st.success(msg)
+                    
+                    # 构造下载文件名
+                    file_suffix = "All"
+                    if filter_code or filter_profit != "全部显示":
+                        file_suffix = "Filtered"
+                        
                     st.download_button(
                         label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                         data=output.getvalue(),
-                        file_name=f"Coupang_Report_Stable_{filter_code if filter_code else 'All'}.xlsx",
+                        file_name=f"Coupang_Report_{file_suffix}.xlsx",
                         mime="application/vnd.ms-excel",
                         type="primary",
                         use_container_width=True
