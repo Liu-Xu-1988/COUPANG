@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能·序号增强版)")
+st.title("📊 Coupang 经营分析看板 (最终版·精度优化)")
 
 # --- 列号配置 ---
 IDX_M_CODE   = 0    # A列: 内部编码
@@ -106,7 +106,7 @@ else:
         try:
             with st.spinner("正在全速计算中..."):
                 
-                # --- Step 1-5: 数据处理 (保持不变) ---
+                # --- Step 1: 基础表 ---
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
 
@@ -117,6 +117,7 @@ else:
                 df_calc['_VAL_PROFIT'] = clean_num(df_calc.iloc[:, IDX_M_PROFIT])
                 df_calc['_VAL_COST'] = clean_num(df_calc.iloc[:, IDX_M_COST])
 
+                # --- Step 2: 销售表 ---
                 sales_list = [read_file_strict(f) for f in files_sales]
                 df_sales_all = pd.concat(sales_list, ignore_index=True)
                 df_sales_all['_MATCH_SKU'] = clean_for_match(df_sales_all.iloc[:, IDX_S_ID])
@@ -124,6 +125,7 @@ else:
                 sales_agg = df_sales_all.groupby('_MATCH_SKU')['销量'].sum().reset_index()
                 sales_agg.rename(columns={'销量': 'SKU销量'}, inplace=True) 
 
+                # --- Step 3: 广告表 ---
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
                 df_ads_all['含税广告费'] = clean_num(df_ads_all.iloc[:, IDX_A_SPEND]) * 1.1
@@ -135,6 +137,7 @@ else:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
+                # --- Step 4: 库存表 ---
                 if files_inv:
                     inv_list = [read_file_strict(f) for f in files_inv]
                     df_inv_all = pd.concat(inv_list, ignore_index=True)
@@ -153,10 +156,13 @@ else:
                 else:
                     inv_j_agg = pd.DataFrame(columns=['_MATCH_BAR', '极风库存'])
 
+                # --- Step 5: 计算 ---
                 df_final = pd.merge(df_calc, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['SKU销量'] = df_final['SKU销量'].fillna(0).astype(int)
+                
                 df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['火箭仓库存'] = df_final['火箭仓库存'].fillna(0).astype(int)
+                
                 df_final = pd.merge(df_final, inv_j_agg, on='_MATCH_BAR', how='left', sort=False)
                 df_final['极风库存'] = df_final['极风库存'].fillna(0).astype(int)
 
@@ -165,7 +171,10 @@ else:
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['SKU销量'].transform('sum')
                 
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
-                df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
+                
+                # 【修改点】产品总广告费：填充0 -> 四舍五入取整
+                df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0).round(0)
+                
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
@@ -265,13 +274,8 @@ else:
                 # ==========================================
                 # 🔥 关键修改：插入序号列 (业务报表)
                 # ==========================================
-                # 重置索引，保证从0开始
                 df_sheet2.reset_index(drop=True, inplace=True)
-                
-                # 生成动态列名 (例如：产品总数(120))
                 idx_col_name = f"产品总数({len(df_sheet2)})"
-                
-                # 插入第一列，从 1 开始
                 df_sheet2.insert(0, idx_col_name, range(1, len(df_sheet2) + 1))
 
                 # ==========================================
@@ -326,7 +330,6 @@ else:
                         try:
                             styler = df.style.format(get_format_dict(df))
                             def zebra_rows(x):
-                                # 对于Sheet2，第一列变成了序号，所以取第二列(Code)判断斑马纹
                                 col_idx = 1 if is_sheet2 else 0 
                                 codes = x.iloc[:, col_idx].astype(str)
                                 groups = (codes != codes.shift()).cumsum()
@@ -380,7 +383,6 @@ else:
                     with tab1:
                         st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=1500)
                     with tab2:
-                        # 隐藏索引，因为我们已经有了“产品总数(XX)”这列序号
                         st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], True), use_container_width=True, height=1500, hide_index=True)
                     with tab3:
                         try:
@@ -407,7 +409,6 @@ else:
 
                         def set_sheet_format(sheet_name, df_obj, group_col_idx):
                             ws = writer.sheets[sheet_name]
-                            # 如果是 Sheet2，由于加了序号列，group_col_idx 需要 +1
                             actual_group_col = group_col_idx + 1 if sheet_name == '业务报表' else group_col_idx
                             
                             raw_codes = df_obj.iloc[:, actual_group_col].astype(str).tolist()
