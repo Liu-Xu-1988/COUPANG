@@ -25,8 +25,8 @@ IDX_A_GROUP    = 6  # G列
 IDX_A_SPEND    = 15 # P列
 IDX_A_SALES    = 29 # AD列 (30列)
 
-# Inventory表 (库存表 - 新增!)
-IDX_I_ID     = 2    # C列: ID (用于匹配基础表D列)
+# Inventory表 (库存表)
+IDX_I_ID     = 2    # C列: ID
 IDX_I_QTY    = 7    # H列: 库存数量
 # -----------------
 
@@ -40,7 +40,6 @@ with st.sidebar:
     file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx', 'xlsm'])
     files_sales = st.file_uploader("2. 销售表 (Sales)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_ads = st.file_uploader("3. 广告表 (Ads)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
-    # 新增库存上传
     files_inv = st.file_uploader("4. 库存信息表 (Inventory)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
@@ -72,7 +71,6 @@ def read_file_strict(file):
 # ==========================================
 # 4. 主逻辑
 # ==========================================
-# 只要前三个表还在，就可以跑主流程，库存表是可选的（但为了完整性最好都有）
 if file_master and files_sales and files_ads:
     st.divider()
     
@@ -113,7 +111,7 @@ if file_master and files_sales and files_ads:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
-                # --- Step 4: 库存表处理 (新增!) ---
+                # --- Step 4: 库存表处理 ---
                 if files_inv:
                     inv_list = [read_file_strict(f) for f in files_inv]
                     df_inv_all = pd.concat(inv_list, ignore_index=True)
@@ -122,10 +120,8 @@ if file_master and files_sales and files_ads:
                     df_inv_all['_MATCH_SKU'] = clean_for_match(df_inv_all.iloc[:, IDX_I_ID])
                     df_inv_all['库存数量'] = clean_num(df_inv_all.iloc[:, IDX_I_QTY])
                     
-                    # 聚合库存 (以防同一个SKU在多行出现)
                     inv_agg = df_inv_all.groupby('_MATCH_SKU')['库存数量'].sum().reset_index()
                 else:
-                    # 如果没上传库存表，就给空表
                     inv_agg = pd.DataFrame(columns=['_MATCH_SKU', '库存数量'])
 
                 # --- Step 5: 关联 & 计算 ---
@@ -133,7 +129,7 @@ if file_master and files_sales and files_ads:
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
                 
-                # 5.2 关联库存 (新增!) -> 这个用于生成 Sheet3
+                # 5.2 关联库存 (生成 Sheet3 数据源)
                 df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['库存数量'] = df_final['库存数量'].fillna(0).astype(int)
 
@@ -150,7 +146,7 @@ if file_master and files_sales and files_ads:
                 # 5.5 净利计算
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # --- Step 6: 报表数据生成 ---
+                # --- Step 6: 报表生成 ---
                 
                 # Sheet2: 业务报表
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量']].copy()
@@ -171,14 +167,10 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
-                # Sheet3: 库存分析 (新增!)
-                # 逻辑：A-M列 (即 Master 的前13列) + N列 (库存数量)
-                # 确保 df_final 保留了 Master 的列顺序
-                # 我们取 df_final 的前13列 (0-12) 和 '库存数量'
+                # Sheet3: 库存分析
+                # 保留 Master 前 13 列 (A-M) + 库存数量 (N)
                 cols_master_AM = df_final.columns[:13].tolist() 
                 df_sheet3 = df_final[cols_master_AM + ['库存数量']].copy()
-                # 确保 Sheet3 也按 A-M 列去重？不，Profit Analysis 是明细表，Inventory Analysis 应该也是明细表
-                # 既然是 "格式和利润分析完全一样"，那么应该保留 SKU 级明细
 
                 # --- Step 7: 清理辅助列 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
@@ -190,7 +182,7 @@ if file_master and files_sales and files_ads:
                 
                 total_qty = df_sheet2['产品总销量'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
-                total_inv = df_final['库存数量'].sum() # 总库存
+                total_inv = df_final['库存数量'].sum()
                 
                 st.subheader("📈 经营概览")
                 k1, k2, k3, k4 = st.columns(4)
@@ -201,7 +193,7 @@ if file_master and files_sales and files_ads:
 
                 st.divider()
 
-                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)", "🏭 3. 库存分析 (新增)"])
+                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)", "🏭 3. 库存分析 (明细)"])
                 
                 def try_style(df, cols, is_sheet2=False):
                     try:
@@ -223,18 +215,15 @@ if file_master and files_sales and files_ads:
                     st.dataframe(try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3) - 结构与利润分析一致，N列为库存")
-                    # 库存不一定需要红绿配色，用蓝色条显示数量
+                    st.caption("库存分析 (Sheet3)")
+                    # 如果没有 matplotlib，这行会退化为普通表格，不会报错
                     try:
-                        st.dataframe(
-                            df_sheet3.style.format(precision=0).bar(subset=['库存数量'], color='#5fba7d'),
-                            use_container_width=True, height=600
-                        )
+                        st.dataframe(df_sheet3.style.format(precision=0).bar(subset=['库存数量'], color='#5fba7d'), use_container_width=True, height=600)
                     except:
                         st.dataframe(df_sheet3, use_container_width=True)
 
                 # ==========================================
-                # 📥 下载逻辑 (3个 Sheet)
+                # 📥 下载逻辑
                 # ==========================================
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -242,29 +231,58 @@ if file_master and files_sales and files_ads:
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
                     df_sheet3.to_excel(writer, index=False, sheet_name='库存分析')
                     
-                    # 通用样式
                     wb = writer.book
                     fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
                     fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                     fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                     
-                    # --- Sheet1 & Sheet3 斑马纹样式 (A-M列通用) ---
                     # 定义斑马纹格式
                     base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                     fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                     fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
 
-                    # 辅助函数：应用斑马纹
+                    # 辅助函数：应用斑马纹 (这里就是刚才报错的地方，现已修复)
                     def apply_zebra(sheet_name, df_obj, target_col_idx_for_group=0):
                         ws = writer.sheets[sheet_name]
-                        # 自动列宽
                         for i, col in enumerate(df_obj.columns):
                             str_len = max(df_obj[col].astype(str).map(len).max(), len(str(col))) * 1.5
                             ws.set_column(i, i, min(max(str_len, 10), 40))
                         
-                        # 斑马纹逻辑
                         raw_codes = df_obj.iloc[:, target_col_idx_for_group].astype(str).tolist()
                         clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                         is_grey = False
                         for i in range(len(raw_codes)):
-                            if i > 0 and clean_codes[i] != clean_codes
+                            # 修复点：加上了 [i-1]:
+                            if i > 0 and clean_codes[i] != clean_codes[i-1]:
+                                is_grey = not is_grey
+                            ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
+                    
+                    # 应用样式
+                    apply_zebra('利润分析', df_final, IDX_M_CODE)
+                    apply_zebra('库存分析', df_sheet3, IDX_M_CODE)
+
+                    # Sheet2 样式
+                    ws2 = writer.sheets['业务报表']
+                    for i, val in enumerate(df_sheet2.columns): ws2.write(0, i, val, fmt_header)
+                    ws2.set_column(0, 0, 20)
+                    ws2.set_column(1, 3, 15, fmt_money)
+                    ws2.set_column(4, 4, 15, fmt_pct)
+                    ws2.set_column(5, 7, 15, fmt_money)
+                    ws2.set_column(8, 8, 15, fmt_pct)
+
+                st.divider()
+                st.success("✅ 全套报表生成完毕！")
+                
+                st.download_button(
+                    label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
+                    data=output.getvalue(),
+                    file_name="Coupang_Full_Report.xlsx",
+                    mime="application/vnd.ms-excel",
+                    type="primary",
+                    use_container_width=True
+                )
+
+        except Exception as e:
+            st.error(f"❌ 运行出错: {e}")
+else:
+    st.info("👈 请上传文件 (库存表可选)")
