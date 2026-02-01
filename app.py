@@ -63,7 +63,6 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    # 放置一个通栏大按钮
     if st.button("🚀 生成看板 & 准备下载", type="primary", use_container_width=True):
         try:
             with st.spinner("正在处理多店数据..."):
@@ -99,18 +98,29 @@ if file_master and files_sales and files_ads:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')['含税广告费'].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费'}, inplace=True)
 
-                # --- Step 4: 关联 ---
+                # --- Step 4: 关联 & 计算 ---
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
+                
+                # 1. 算 SKU 毛利
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
+                
+                # 2. 算 产品总利润 (汇总)
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 
+                # 3. 算 产品总销量 (汇总 Sheet1 中 N列数值，即 O列_合并销量)
+                df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['O列_合并销量'].transform('sum')
+                
+                # 4. 关联广告
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
+                
+                # 5. 算净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # --- Step 5: Sheet2 逻辑 ---
-                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润']].copy()
+                # --- Step 5: Sheet2 逻辑 (列重排) ---
+                # 先取出基础列
+                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
                 
                 # 计算比值
@@ -118,16 +128,22 @@ if file_master and files_sales and files_ads:
                     lambda x: x['R列_产品总广告费'] / x['Q列_产品总利润'] if x['Q列_产品总利润'] != 0 else 0, 
                     axis=1
                 )
+                
+                # 【关键修改】调整列顺序：把 '产品总销量' 移到 '广告/毛利比' 后面
+                # 最终顺序：产品编号, 总毛利, 总广告费, 净利润, 广告/毛利比, 产品总销量
+                cols_order = [col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '广告/毛利比', '产品总销量']
+                df_sheet2 = df_sheet2[cols_order]
 
                 # --- Step 6: 清理 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
                 # ==========================================
-                # 🔥 看板展示 (高度调大 + 防报错)
+                # 🔥 看板展示
                 # ==========================================
                 
                 # KPI
+                total_qty = df_sheet2['产品总销量'].sum()
                 total_profit = df_sheet2['Q列_产品总利润'].sum()
                 total_ads = df_sheet2['R列_产品总广告费'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
@@ -135,7 +151,7 @@ if file_master and files_sales and files_ads:
                 st.subheader("📈 经营概览")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
-                k2.metric("📦 产品总毛利", f"{total_profit:,.0f}")
+                k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
                 k3.metric("📢 总广告费", f"{total_ads:,.0f}")
                 k4.metric("📉 整体广告比", f"{(total_ads/total_profit if total_profit else 0):.1%}")
 
@@ -144,59 +160,72 @@ if file_master and files_sales and files_ads:
                 # Tab 分页
                 tab1, tab2 = st.tabs(["📝 1. 利润明细 (查账)", "📊 2. 业务报表 (汇报)"])
                 
-                # 尝试应用颜色样式 (如果报错则降级显示普通表格)
-                def try_style(df, cols, is_pct=False):
+                # 样式函数
+                def try_style(df, cols, is_sheet2=False):
                     try:
                         styler = df.style.format(precision=0)
-                        if is_pct:
-                            styler = styler.format({'广告/毛利比': '{:.1%}'})
-                        # 尝试上色
+                        if is_sheet2:
+                            # 格式化百分比列和整数列
+                            styler = styler.format({
+                                '广告/毛利比': '{:.1%}',
+                                '产品总销量': '{:,.0f}'
+                            })
                         return styler.background_gradient(subset=cols, cmap='RdYlGn', vmin=-10000, vmax=10000)
                     except:
-                        # 如果没有 matplotlib，直接返回原始 df
                         return df
 
                 with tab1:
-                    st.caption("🔍 明细数据 (已加长表格高度，方便拖动)")
+                    st.caption("🔍 明细数据")
                     st.dataframe(
                         try_style(df_final, ['S列_最终净利润']),
                         use_container_width=True,
-                        height=1000  # <--- 关键修改：高度变大
+                        height=800
                     )
                 
                 with tab2:
-                    st.caption("🏆 汇总数据 (已加长表格高度，方便拖动)")
+                    st.caption("🏆 汇总数据 (新增列：产品总销量)")
                     st.dataframe(
-                        try_style(df_sheet2, ['S列_最终净利润'], is_pct=True),
+                        try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True),
                         use_container_width=True,
-                        height=1000  # <--- 关键修改：高度变大
+                        height=800
                     )
 
                 # ==========================================
-                # 📥 总下载逻辑 (包含两个 Sheet)
+                # 📥 总下载逻辑
                 # ==========================================
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    # 写入 Sheet1
+                    # Sheet1
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
                     
-                    # 写入 Sheet2
+                    # Sheet2
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
                     
-                    # 简单美化 Excel
+                    # Excel 美化
                     wb = writer.book
                     ws2 = writer.sheets['业务报表']
-                    fmt_pct = wb.add_format({'num_format': '0.0%'})
-                    ws2.set_column(4, 4, 15, fmt_pct) # 设置比值列为百分比格式
+                    
+                    fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                    fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
+                    fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
+                    
+                    # 写表头
+                    for col_num, value in enumerate(df_sheet2.columns.values):
+                        ws2.write(0, col_num, value, fmt_header)
+
+                    # 设置列宽
+                    ws2.set_column(0, 0, 20)            # 产品编号
+                    ws2.set_column(1, 3, 15, fmt_money) # 钱
+                    ws2.set_column(4, 4, 15, fmt_pct)   # 广告比
+                    ws2.set_column(5, 5, 15, fmt_money) # 销量
 
                 st.divider()
                 st.success("✅ 报表已生成！")
                 
-                # 唯一的下载按钮
                 st.download_button(
-                    label="📥 一键下载完整报表 (含两个Sheet)",
+                    label="📥 一键下载完整报表 (含销量统计)",
                     data=output.getvalue(),
-                    file_name="Coupang_Final_Report.xlsx",
+                    file_name="Coupang_Final_Report_v3.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
