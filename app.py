@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (智能库存预警 Pro)")
+st.title("📊 Coupang 经营分析看板 (全功能完美版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -80,7 +80,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    if st.button("🚀 生成智能报表", type="primary", use_container_width=True):
+    if st.button("🚀 生成完美报表", type="primary", use_container_width=True):
         try:
             with st.spinner("正在进行多维数据计算..."):
                 
@@ -165,13 +165,21 @@ if file_master and files_sales and files_ads:
 
                 # --- Step 6: 报表生成 ---
                 
-                # Sheet2: 业务报表
+                # Sheet2: 业务报表 (产品维度)
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
+                # 【新增】计算产品维度的总库存
+                df_final['产品_总库存'] = df_final['产品_火箭仓库存'] + df_final['产品_极风库存']
 
-                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量', '产品_火箭仓库存', '产品_极风库存']].copy()
+                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量', '产品_火箭仓库存', '产品_极风库存', '产品_总库存']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
-                df_sheet2.rename(columns={'产品_火箭仓库存': '火箭仓库存', '产品_极风库存': '极风库存'}, inplace=True)
+                
+                # 重命名
+                df_sheet2.rename(columns={
+                    '产品_火箭仓库存': '火箭仓库存', 
+                    '产品_极风库存': '极风库存',
+                    '产品_总库存': '总库存' # <--- 新增
+                }, inplace=True)
 
                 df_sheet2['广告/毛利比'] = df_sheet2.apply(
                     lambda x: x['R列_产品总广告费'] / x['Q列_产品总利润'] if x['Q列_产品总利润'] != 0 else 0, axis=1
@@ -181,10 +189,11 @@ if file_master and files_sales and files_ads:
                     lambda x: x['自然销量'] / x['产品总销量'] if x['产品总销量'] != 0 else 0, axis=1
                 )
                 
+                # Sheet2 最终列顺序 (总库存加在最后)
                 cols_order_s2 = [
                     col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', 
                     '广告/毛利比', '产品总销量', '产品广告销量', '自然销量', '自然销量占比',
-                    '火箭仓库存', '极风库存'
+                    '火箭仓库存', '极风库存', '总库存' # <--- 新增在最后
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
@@ -218,7 +227,7 @@ if file_master and files_sales and files_ads:
                 
                 total_qty = df_sheet2['产品总销量'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
-                inv_total = df_sheet2['火箭仓库存'].sum() + df_sheet2['极风库存'].sum()
+                inv_total = df_sheet2['总库存'].sum()
                 total_restock = df_sheet3['待补数量'].sum()
                 
                 st.subheader("📈 经营概览")
@@ -230,7 +239,7 @@ if file_master and files_sales and files_ads:
 
                 st.divider()
 
-                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析 (健康监控)"])
+                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表 (含总库存)", "🏭 3. 库存分析 (健康监控)"])
                 
                 def apply_visual_style(df, cols_to_color, is_sheet2=False):
                     try:
@@ -255,12 +264,9 @@ if file_master and files_sales and files_ads:
                         return styler
                     except: return df
                 
-                # --- 库存分析专用样式 (含红/紫/黄高亮 & 粗体) ---
                 def apply_inventory_style(df):
                     try:
                         styler = df.style.format(precision=0)
-                        
-                        # 1. 斑马纹
                         def zebra_rows(x):
                             codes = x.iloc[:, 0].astype(str)
                             groups = (codes != codes.shift()).cumsum()
@@ -270,39 +276,25 @@ if file_master and files_sales and files_ads:
                             return styles
                         styler = styler.apply(zebra_rows, axis=None)
 
-                        # 2. 智能预警逻辑
                         def highlight_logic(x):
                             styles = []
                             for col in x.index:
                                 style = ''
-                                # A. 待补数量 (黄底 + 橙字 + 粗体)
-                                if col == '待补数量':
-                                    if x['待补数量'] > 0:
-                                        style += 'background-color: #fff3cd; color: #e65100; font-weight: bold;'
-                                
-                                # B. 总库存高亮
+                                if col == '待补数量' and x['待补数量'] > 0:
+                                    style += 'background-color: #fff3cd; color: #e65100; font-weight: bold;'
                                 if col == '总库存':
                                     try:
                                         total = x['总库存']
                                         safe = x['安全库存']
                                         redundant = x['冗余标准']
-                                        
-                                        # 双零排除
-                                        if total == 0 and redundant == 0:
-                                            pass 
-                                        elif total < safe:
-                                            # 红色 (缺货)
-                                            style += 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
-                                        elif total >= redundant:
-                                            # 紫色 (滞销)
-                                            style += 'background-color: #e1bee7; color: #4a148c; font-weight: bold;'
+                                        if total == 0 and redundant == 0: pass 
+                                        elif total < safe: style += 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
+                                        elif total >= redundant: style += 'background-color: #e1bee7; color: #4a148c; font-weight: bold;'
                                     except: pass
-                                
                                 styles.append(style)
                             return styles
 
                         styler = styler.apply(highlight_logic, axis=1)
-
                         return styler
                     except: return df
 
@@ -311,14 +303,13 @@ if file_master and files_sales and files_ads:
                     st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                 
                 with tab2:
-                    st.caption("业务汇总 (Sheet2)")
+                    st.caption("业务汇总 (Sheet2) - 已添加【总库存】列")
                     st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3) - 🟡黄:待补货 | 🔴红:缺货 | 🟣紫:滞销")
+                    st.caption("库存分析 (Sheet3)")
                     try:
                         st_inv = apply_inventory_style(df_sheet3)
-                        # 叠加数据条
                         st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
                                        .bar(subset=['安全库存'], color='#ffd700')\
                                        .bar(subset=['冗余标准'], color='#ff6347')
@@ -368,7 +359,7 @@ if file_master and files_sales and files_ads:
                     ws2.set_column(4, 4, 15, fmt_pct)
                     ws2.set_column(5, 7, 15, fmt_money)
                     ws2.set_column(8, 8, 15, fmt_pct)
-                    ws2.set_column(9, 10, 15, fmt_money)
+                    ws2.set_column(9, 11, 15, fmt_money) # 扩展到第12列(总库存)
 
                 st.divider()
                 st.success("✅ 报表生成完毕！")
@@ -376,7 +367,7 @@ if file_master and files_sales and files_ads:
                 st.download_button(
                     label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                     data=output.getvalue(),
-                    file_name="Coupang_Full_Report_v13.xlsx",
+                    file_name="Coupang_Full_Report_v14.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
