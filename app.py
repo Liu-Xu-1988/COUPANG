@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能·稳定版)")
+st.title("📊 Coupang 经营分析看板 (全功能·强力容错版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -86,7 +86,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    btn_label = "🚀 生成规范报表"
+    btn_label = "🚀 生成强力容错报表"
     if filter_code:
         btn_label += f" (筛选: {filter_code})"
     
@@ -267,35 +267,38 @@ if file_master and files_sales and files_ads:
 
                     tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析"])
                     
-                    # 定义格式：安全函数 (修复 Unknown format code '%' error)
-                    def safe_pct(x):
+                    # === 核心修复区：定义绝对安全的格式化函数 ===
+                    def safe_fmt_int(x):
                         try:
-                            # 尝试转浮点再格式化
-                            return "{:.1%}".format(float(x))
+                            if pd.isna(x) or x == '': return ""
+                            return "{:,.0f}".format(float(x))
                         except:
-                            # 失败则返回原值(如是文字)
                             return str(x)
 
-                    fmt_money_int = "{:,.0f}"
-                    
-                    # 动态生成格式化规则
+                    def safe_fmt_pct(x):
+                        try:
+                            if pd.isna(x) or x == '': return ""
+                            return "{:.1%}".format(float(x))
+                        except:
+                            return str(x)
+
+                    # 动态生成格式化字典，但传入函数而不是字符串
                     def get_format_dict(df):
                         format_dict = {}
                         for col in df.columns:
                             c_str = str(col)
-                            if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利']):
+                            # 整数类
+                            if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补']):
                                 if '率' not in c_str and '比' not in c_str:
-                                    format_dict[col] = fmt_money_int
-                            elif any(x in c_str for x in ['销量', '库存', '数量', '标准', '待补']):
-                                if '比' not in c_str:
-                                    format_dict[col] = fmt_money_int
+                                    format_dict[col] = safe_fmt_int
+                            # 百分比类
                             elif any(x in c_str for x in ['比', '率', '占比']):
-                                # 使用安全百分比函数，而不是直接字符串
-                                format_dict[col] = safe_pct
+                                format_dict[col] = safe_fmt_pct
                         return format_dict
 
                     def apply_visual_style(df, cols_to_color, is_sheet2=False):
                         try:
+                            # 使用安全的格式化字典
                             styler = df.style.format(get_format_dict(df))
                             
                             def zebra_rows(x):
@@ -350,7 +353,7 @@ if file_master and files_sales and files_ads:
                         except: return df
 
                     with tab1:
-                        st.caption("利润明细 (Sheet1)")
+                        st.caption("利润明细 (Sheet1) - 智能容错格式化")
                         st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                     
                     with tab2:
@@ -369,7 +372,7 @@ if file_master and files_sales and files_ads:
                             st.dataframe(df_sheet3, use_container_width=True)
 
                     # ==========================================
-                    # 📥 下载逻辑 (Excel 格式精细化)
+                    # 📥 下载逻辑
                     # ==========================================
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
