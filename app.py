@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (最终版·排版优化)")
+st.title("📊 Coupang 经营分析看板 (最终版·风险预警)")
 
 # --- 列号配置 ---
 IDX_M_CODE   = 0    # A列
@@ -193,14 +193,15 @@ else:
                     lambda x: x['自然销量'] / x['产品总销量'] if x['产品总销量'] != 0 else 0, axis=1
                 )
                 
-                # 【修改点】列序调整：自然销量占比提至广告费占比后，总库存提至产品总销量前
                 cols_order_s2 = [
                     col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', 
-                    '广告费占比', '自然销量占比', # 放在这里
-                    '总库存', # 放在这里
-                    '产品总销量', '产品广告销量', '自然销量',
+                    '广告费占比', '自然销量占比', 
+                    '总库存', 
+                    '产品总销量', '产品广告销量', '自然销量', '自然销量占比',
                     '火箭仓库存', '极风库存'
                 ]
+                # 去重列名 (自然销量占比重复了)
+                cols_order_s2 = list(dict.fromkeys(cols_order_s2))
                 df_sheet2 = df_sheet2[cols_order_s2]
 
                 # Sheet3 (库存分析)
@@ -330,10 +331,26 @@ else:
                                 return styles
                             styler = styler.apply(zebra_rows, axis=None)
                             
-                            # 【修改点】对特定列加粗
-                            def bold_cols(x):
-                                return ['font-weight: bold' if col in ['自然销量占比', '总库存'] else '' for col in x.index]
-                            styler = styler.apply(bold_cols, axis=1)
+                            # 【修改点】特定列加粗 & 广告占比高亮
+                            def highlight_cells(x):
+                                styles = []
+                                for col in x.index:
+                                    style = ''
+                                    # 1. 标题加粗
+                                    if col in ['自然销量占比', '总库存']:
+                                        style += 'font-weight: bold;'
+                                    
+                                    # 2. 广告费占比 > 50% 红色加粗
+                                    if col == '广告费占比':
+                                        try:
+                                            if x[col] > 0.5:
+                                                style += 'color: #d32f2f; font-weight: bold;'
+                                        except: pass
+                                    
+                                    styles.append(style)
+                                return styles
+                            
+                            styler = styler.apply(highlight_cells, axis=1)
 
                             valid_cols = [c for c in cols_to_color if c in df.columns]
                             if valid_cols:
@@ -400,10 +417,12 @@ else:
                         fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
-                        # 【修改点】新增加粗格式
                         fmt_pct_bold = wb.add_format({'num_format': '0.0%', 'align': 'center', 'bold': True})
                         fmt_int_bold = wb.add_format({'num_format': '#,##0', 'align': 'center', 'bold': True})
                         
+                        # 红色预警格式
+                        fmt_red_alert = wb.add_format({'num_format': '0.0%', 'align': 'center', 'bold': True, 'font_color': '#9C0006', 'bg_color': '#FFC7CE'})
+
                         fmt_grey = wb.add_format({'bg_color': '#BFBFBF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_white = wb.add_format({'bg_color': '#FFFFFF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
@@ -423,7 +442,6 @@ else:
                                 width = 12
                                 cell_fmt = None
                                 
-                                # 优先判断是否是需要加粗的列
                                 is_bold_col = col in ['自然销量占比', '总库存']
                                 
                                 if any(x in c_str for x in ['比', '率', '占比']):
@@ -436,6 +454,15 @@ else:
                                 if cell_fmt: ws.set_column(i, i, width, cell_fmt)
                                 else: ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
+                                
+                                # 【修改点】Excel 条件格式：广告费占比 > 0.5 变红
+                                if col == '广告费占比':
+                                    ws.conditional_format(1, i, len(df_obj), i, {
+                                        'type': 'cell',
+                                        'criteria': '>',
+                                        'value': 0.5,
+                                        'format': fmt_red_alert
+                                    })
 
                         set_sheet_format('利润分析', df_final_clean, IDX_M_CODE)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
