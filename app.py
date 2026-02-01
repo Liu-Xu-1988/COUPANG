@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能·智能筛选版)")
+st.title("📊 Coupang 经营分析看板 (全功能·样式规范版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -40,13 +40,11 @@ IDX_I_J_QTY  = 10   # K列: 数值
 # 2. 侧边栏 (含筛选 & 上传)
 # ==========================================
 with st.sidebar:
-    # --- 新增：顶部筛选区 ---
     st.header("🔍 数据筛选")
     filter_code = st.text_input("输入产品编号 (如 C123)", placeholder="留空则显示全部...").strip().upper()
     
     st.divider()
     
-    # --- 原有：上传区 ---
     st.header("📂 数据源上传")
     st.info("请按顺序上传以下文件：")
     
@@ -88,7 +86,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    btn_label = "🚀 生成报表"
+    btn_label = "🚀 生成规范报表"
     if filter_code:
         btn_label += f" (筛选: {filter_code})"
     
@@ -98,7 +96,7 @@ if file_master and files_sales and files_ads:
                 
                 # --- Step 1: 基础表 ---
                 df_master = read_file_strict(file_master)
-                col_code_name = df_master.columns[IDX_M_CODE] # 获取产品编号的列名
+                col_code_name = df_master.columns[IDX_M_CODE]
 
                 df_master['_MATCH_SKU'] = clean_for_match(df_master.iloc[:, IDX_M_SKU])
                 df_master['_MATCH_BAR'] = clean_for_match(df_master.iloc[:, IDX_M_BAR])
@@ -220,14 +218,11 @@ if file_master and files_sales and files_ads:
                     axis=1
                 )
 
-                # 滞销库存货值
                 def calc_dead_stock_value(row):
                     total = row['总库存']
                     redundant_std = row['冗余标准']
-                    if total == 0 and redundant_std == 0:
-                        return 0
-                    if total >= redundant_std:
-                        return row['库存货值']
+                    if total == 0 and redundant_std == 0: return 0
+                    if total >= redundant_std: return row['库存货值']
                     return 0
                 
                 df_final['滞销库存货值'] = df_final.apply(calc_dead_stock_value, axis=1)
@@ -241,24 +236,10 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet3 = df_final[cols_inv_final].copy()
 
-                # --- Step 8: 清理 & 重命名 ---
-                cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_') or c.startswith('产品_')]
-                df_final.drop(columns=cols_to_drop, inplace=True)
-                
-                # ==========================================
-                # 🔍 Step 9: 执行筛选 (关键新增步骤)
-                # ==========================================
+                # --- Step 8: 筛选 ---
                 if filter_code:
-                    st.toast(f"🔎 正在筛选产品: {filter_code}")
-                    # 使用 str.contains 进行包含匹配
-                    
-                    # 1. 筛选 Sheet1
                     df_final = df_final[df_final[col_code_name].astype(str).str.contains(filter_code, na=False)]
-                    
-                    # 2. 筛选 Sheet2
                     df_sheet2 = df_sheet2[df_sheet2[col_code_name].astype(str).str.contains(filter_code, na=False)]
-                    
-                    # 3. 筛选 Sheet3
                     df_sheet3 = df_sheet3[df_sheet3[col_code_name].astype(str).str.contains(filter_code, na=False)]
 
                 # ==========================================
@@ -266,7 +247,7 @@ if file_master and files_sales and files_ads:
                 # ==========================================
                 
                 if df_sheet2.empty:
-                    st.warning(f"⚠️ 未找到包含 '{filter_code}' 的产品，请检查输入。")
+                    st.warning(f"⚠️ 未找到包含 '{filter_code}' 的产品。")
                 else:
                     total_qty = df_sheet2['产品总销量'].sum()
                     net_profit = df_sheet2['S列_最终净利润'].sum()
@@ -286,15 +267,33 @@ if file_master and files_sales and files_ads:
 
                     tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析"])
                     
+                    # 定义统一的格式化字典
+                    fmt_money_int = "{:,.0f}"
+                    fmt_pct = "{:.1%}"
+                    
+                    # 动态生成格式化规则
+                    def get_format_dict(df):
+                        format_dict = {}
+                        for col in df.columns:
+                            c_str = str(col)
+                            # 利润、费用、货值、金额 -> 整数
+                            if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利']):
+                                if '率' not in c_str and '比' not in c_str:
+                                    format_dict[col] = fmt_money_int
+                            # 销量、库存、数量 -> 整数
+                            elif any(x in c_str for x in ['销量', '库存', '数量', '标准']):
+                                if '比' not in c_str:
+                                    format_dict[col] = fmt_money_int
+                            # 比、率、占比 -> 百分比
+                            elif any(x in c_str for x in ['比', '率', '占比']):
+                                format_dict[col] = fmt_pct
+                        return format_dict
+
                     def apply_visual_style(df, cols_to_color, is_sheet2=False):
                         try:
-                            styler = df.style.format(precision=0)
-                            if is_sheet2:
-                                styler = styler.format({
-                                    '广告/毛利比': '{:.1%}', '自然销量占比': '{:.1%}',
-                                    '产品总销量': '{:,.0f}', '产品广告销量': '{:,.0f}', '自然销量': '{:,.0f}'
-                                })
-
+                            # 应用自动格式化
+                            styler = df.style.format(get_format_dict(df))
+                            
                             def zebra_rows(x):
                                 codes = x.iloc[:, 0].astype(str)
                                 groups = (codes != codes.shift()).cumsum()
@@ -311,10 +310,8 @@ if file_master and files_sales and files_ads:
                     
                     def apply_inventory_style(df):
                         try:
-                            styler = df.style.format(precision=0).format({
-                                '库存货值': '{:,.0f}',
-                                '滞销库存货值': '{:,.0f}'
-                            })
+                            styler = df.style.format(get_format_dict(df))
+                            
                             def zebra_rows(x):
                                 codes = x.iloc[:, 0].astype(str)
                                 groups = (codes != codes.shift()).cumsum()
@@ -349,11 +346,11 @@ if file_master and files_sales and files_ads:
                         except: return df
 
                     with tab1:
-                        st.caption("利润明细 (Sheet1)")
+                        st.caption("利润明细 (Sheet1) - 金额取整，比率百分比")
                         st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                     
                     with tab2:
-                        st.caption("业务汇总 (Sheet2)")
+                        st.caption("业务汇总 (Sheet2) - 格式已统一规范")
                         st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                     
                     with tab3:
@@ -368,7 +365,7 @@ if file_master and files_sales and files_ads:
                             st.dataframe(df_sheet3, use_container_width=True)
 
                     # ==========================================
-                    # 📥 下载逻辑 (下载的是筛选后的结果)
+                    # 📥 下载逻辑 (Excel 格式精细化)
                     # ==========================================
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -378,42 +375,59 @@ if file_master and files_sales and files_ads:
                         
                         wb = writer.book
                         fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
-                        fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
+                        
+                        # 核心格式：整数金额/数量
+                        fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
+                        # 核心格式：百分比
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                         
+                        # 斑马纹
                         base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                         fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                         fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
 
-                        def apply_zebra(sheet_name, df_obj, target_col_idx_for_group=0):
+                        # 通用列宽与格式设置函数
+                        def set_sheet_format(sheet_name, df_obj, group_col_idx):
                             ws = writer.sheets[sheet_name]
-                            for i, col in enumerate(df_obj.columns):
-                                str_len = max(df_obj[col].astype(str).map(len).max(), len(str(col))) * 1.5
-                                ws.set_column(i, i, min(max(str_len, 10), 40))
                             
-                            raw_codes = df_obj.iloc[:, target_col_idx_for_group].astype(str).tolist()
+                            # 1. 自动列宽 & 斑马纹
+                            raw_codes = df_obj.iloc[:, group_col_idx].astype(str).tolist()
                             clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                             is_grey = False
+                            
                             for i in range(len(raw_codes)):
                                 if i > 0 and clean_codes[i] != clean_codes[i-1]:
                                     is_grey = not is_grey
                                 ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
-                        
-                        apply_zebra('利润分析', df_final, IDX_M_CODE)
-                        apply_zebra('库存分析', df_sheet3, IDX_M_CODE)
 
-                        ws2 = writer.sheets['业务报表']
-                        for i, val in enumerate(df_sheet2.columns): ws2.write(0, i, val, fmt_header)
-                        ws2.set_column(0, 0, 20)
-                        ws2.set_column(1, 3, 15, fmt_money)
-                        ws2.set_column(4, 4, 15, fmt_pct)
-                        ws2.set_column(5, 7, 15, fmt_money)
-                        ws2.set_column(8, 8, 15, fmt_pct)
-                        ws2.set_column(9, 11, 15, fmt_money)
+                            # 2. 智能设置列格式 (金额/比率)
+                            for i, col in enumerate(df_obj.columns):
+                                c_str = str(col)
+                                width = 12 # 默认宽度
+                                cell_fmt = None
+                                
+                                # 规则匹配
+                                if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补']):
+                                    if '率' not in c_str and '比' not in c_str:
+                                        cell_fmt = fmt_int # 整数
+                                        width = 15
+                                elif any(x in c_str for x in ['比', '率', '占比']):
+                                    cell_fmt = fmt_pct # 百分比
+                                    width = 12
+                                
+                                # 设置列宽和格式
+                                if cell_fmt:
+                                    ws.set_column(i, i, width, cell_fmt)
+                                else:
+                                    ws.set_column(i, i, width) # 仅设置宽度
+                                    
+                                # 写表头
+                                ws.write(0, i, col, fmt_header)
 
-                        # Sheet3 格式
-                        ws3 = writer.sheets['库存分析']
-                        ws3.set_column(16, 17, 18, fmt_money)
+                        # 应用到所有 Sheet
+                        set_sheet_format('利润分析', df_final, IDX_M_CODE)
+                        set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
+                        set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
 
                     st.divider()
                     st.success(f"✅ 报表生成完毕！{' (已应用筛选: ' + filter_code + ')' if filter_code else ''}")
@@ -421,7 +435,7 @@ if file_master and files_sales and files_ads:
                     st.download_button(
                         label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                         data=output.getvalue(),
-                        file_name=f"Coupang_Report_{filter_code if filter_code else 'Full'}.xlsx",
+                        file_name=f"Coupang_Report_Final_{filter_code if filter_code else 'All'}.xlsx",
                         mime="application/vnd.ms-excel",
                         type="primary",
                         use_container_width=True
