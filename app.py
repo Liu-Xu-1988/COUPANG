@@ -20,6 +20,7 @@ IDX_S_QTY    = 8    # Sales I列
 IDX_A_CAMPAIGN = 5  # Ads F列
 IDX_A_GROUP    = 6  # Ads G列
 IDX_A_SPEND    = 15 # Ads P列
+IDX_A_SALES    = 29 # Ads AD列 (第30列) -> 广告销量 (新增!)
 # -----------------
 
 # ==========================================
@@ -85,42 +86,50 @@ if file_master and files_sales and files_ads:
                 sales_agg = df_sales_all.groupby('_MATCH_SKU')['销量'].sum().reset_index()
                 sales_agg.rename(columns={'销量': 'O列_合并销量'}, inplace=True)
 
-                # --- Step 3: 广告表 ---
+                # --- Step 3: 广告表 (含广告销量) ---
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
 
+                # 清洗数据
                 df_ads_all['含税广告费'] = clean_num(df_ads_all.iloc[:, IDX_A_SPEND]) * 1.1
+                # 新增：清洗广告销量 (AD列)
+                df_ads_all['广告销量'] = clean_num(df_ads_all.iloc[:, IDX_A_SALES])
+                
+                # 提取编码
                 df_ads_all['Code_Group'] = df_ads_all.iloc[:, IDX_A_GROUP].apply(extract_code_from_text)
                 df_ads_all['Code_Campaign'] = df_ads_all.iloc[:, IDX_A_CAMPAIGN].apply(extract_code_from_text)
                 df_ads_all['_MATCH_CODE'] = df_ads_all['Code_Group'].fillna(df_ads_all['Code_Campaign'])
 
                 valid_ads = df_ads_all.dropna(subset=['_MATCH_CODE'])
-                ads_agg = valid_ads.groupby('_MATCH_CODE')['含税广告费'].sum().reset_index()
-                ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费'}, inplace=True)
+                
+                # 聚合：同时汇总 广告费 和 广告销量
+                ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
+                ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
                 # --- Step 4: 关联 & 计算 ---
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
                 
-                # 1. 算 SKU 毛利
+                # 算 SKU 毛利
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
                 
-                # 2. 算 产品总利润 (汇总)
+                # 算 产品总利润 (汇总)
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 
-                # 3. 算 产品总销量 (汇总 Sheet1 中 N列数值，即 O列_合并销量)
+                # 算 产品总销量 (汇总)
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['O列_合并销量'].transform('sum')
                 
-                # 4. 关联广告
+                # 关联广告 (含销量)
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
+                df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0) # 填充空值为0
                 
-                # 5. 算净利
+                # 算净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # --- Step 5: Sheet2 逻辑 (列重排) ---
-                # 先取出基础列
-                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量']].copy()
+                # --- Step 5: Sheet2 逻辑 (整理列) ---
+                # 选取需要的列
+                df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
                 
                 # 计算比值
@@ -129,9 +138,17 @@ if file_master and files_sales and files_ads:
                     axis=1
                 )
                 
-                # 【关键修改】调整列顺序：把 '产品总销量' 移到 '广告/毛利比' 后面
-                # 最终顺序：产品编号, 总毛利, 总广告费, 净利润, 广告/毛利比, 产品总销量
-                cols_order = [col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '广告/毛利比', '产品总销量']
+                # 【最终列顺序】
+                # 产品编号, 总毛利, 总广告费, 净利润, 广告/毛利比, 产品总销量, 广告销量
+                cols_order = [
+                    col_code_name, 
+                    'Q列_产品总利润', 
+                    'R列_产品总广告费', 
+                    'S列_最终净利润', 
+                    '广告/毛利比', 
+                    '产品总销量', 
+                    '产品广告销量' # <--- 新增在这里
+                ]
                 df_sheet2 = df_sheet2[cols_order]
 
                 # --- Step 6: 清理 ---
@@ -144,16 +161,16 @@ if file_master and files_sales and files_ads:
                 
                 # KPI
                 total_qty = df_sheet2['产品总销量'].sum()
-                total_profit = df_sheet2['Q列_产品总利润'].sum()
-                total_ads = df_sheet2['R列_产品总广告费'].sum()
+                ad_qty = df_sheet2['产品广告销量'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
+                total_ads = df_sheet2['R列_产品总广告费'].sum()
                 
                 st.subheader("📈 经营概览")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
                 k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
-                k3.metric("📢 总广告费", f"{total_ads:,.0f}")
-                k4.metric("📉 整体广告比", f"{(total_ads/total_profit if total_profit else 0):.1%}")
+                k3.metric("📢 广告带来的销量", f"{ad_qty:,.0f}", delta_color="off")
+                k4.metric("📉 广告费", f"{total_ads:,.0f}")
 
                 st.divider()
 
@@ -165,10 +182,10 @@ if file_master and files_sales and files_ads:
                     try:
                         styler = df.style.format(precision=0)
                         if is_sheet2:
-                            # 格式化百分比列和整数列
                             styler = styler.format({
                                 '广告/毛利比': '{:.1%}',
-                                '产品总销量': '{:,.0f}'
+                                '产品总销量': '{:,.0f}',
+                                '产品广告销量': '{:,.0f}'
                             })
                         return styler.background_gradient(subset=cols, cmap='RdYlGn', vmin=-10000, vmax=10000)
                     except:
@@ -183,7 +200,7 @@ if file_master and files_sales and files_ads:
                     )
                 
                 with tab2:
-                    st.caption("🏆 汇总数据 (新增列：产品总销量)")
+                    st.caption("🏆 汇总数据 (含新增列：广告销量)")
                     st.dataframe(
                         try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True),
                         use_container_width=True,
@@ -195,10 +212,7 @@ if file_master and files_sales and files_ads:
                 # ==========================================
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    # Sheet1
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
-                    
-                    # Sheet2
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
                     
                     # Excel 美化
@@ -217,15 +231,15 @@ if file_master and files_sales and files_ads:
                     ws2.set_column(0, 0, 20)            # 产品编号
                     ws2.set_column(1, 3, 15, fmt_money) # 钱
                     ws2.set_column(4, 4, 15, fmt_pct)   # 广告比
-                    ws2.set_column(5, 5, 15, fmt_money) # 销量
+                    ws2.set_column(5, 6, 15, fmt_money) # 销量 x 2列
 
                 st.divider()
                 st.success("✅ 报表已生成！")
                 
                 st.download_button(
-                    label="📥 一键下载完整报表 (含销量统计)",
+                    label="📥 一键下载完整报表",
                     data=output.getvalue(),
-                    file_name="Coupang_Final_Report_v3.xlsx",
+                    file_name="Coupang_Final_Report_v4.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
