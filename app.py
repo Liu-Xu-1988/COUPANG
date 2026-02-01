@@ -7,14 +7,14 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (最终版·术语修正)")
+st.title("📊 Coupang 经营分析看板 (最终版·排版优化)")
 
 # --- 列号配置 ---
-IDX_M_CODE   = 0    # A列: 内部编码
-IDX_M_SKU    = 3    # D列: SKU ID
-IDX_M_COST   = 6    # G列: 采购价格
-IDX_M_PROFIT = 10   # K列: 单品毛利
-IDX_M_BAR    = 12   # M列: ID号码
+IDX_M_CODE   = 0    # A列
+IDX_M_SKU    = 3    # D列
+IDX_M_COST   = 6    # G列
+IDX_M_PROFIT = 10   # K列
+IDX_M_BAR    = 12   # M列
 
 IDX_S_ID     = 0    # A列
 IDX_S_QTY    = 8    # I列
@@ -165,10 +165,7 @@ else:
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['SKU销量'].transform('sum')
                 
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
-                
-                # 广告费：填0 -> 取整 -> 转int
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0).round(0).astype(int)
-                
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
@@ -188,7 +185,6 @@ else:
                     '产品_总库存': '总库存'
                 }, inplace=True)
 
-                # 【修改点】重命名为 "广告费占比"
                 df_sheet2['广告费占比'] = df_sheet2.apply(
                     lambda x: x['R列_产品总广告费'] / x['Q列_产品总利润'] if x['Q列_产品总利润'] != 0 else 0, axis=1
                 )
@@ -197,11 +193,13 @@ else:
                     lambda x: x['自然销量'] / x['产品总销量'] if x['产品总销量'] != 0 else 0, axis=1
                 )
                 
-                # 【修改点】更新列顺序
+                # 【修改点】列序调整：自然销量占比提至广告费占比后，总库存提至产品总销量前
                 cols_order_s2 = [
                     col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', 
-                    '广告费占比', '产品总销量', '产品广告销量', '自然销量', '自然销量占比',
-                    '火箭仓库存', '极风库存', '总库存'
+                    '广告费占比', '自然销量占比', # 放在这里
+                    '总库存', # 放在这里
+                    '产品总销量', '产品广告销量', '自然销量',
+                    '火箭仓库存', '极风库存'
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
@@ -313,17 +311,10 @@ else:
                         format_dict = {}
                         for col in df.columns:
                             c_str = str(col)
-                            # "占比" 会被下面的 elif 捕获，显示为百分比
-                            # "广告费" 会被这里的 if 捕获，显示为整数
-                            # 必须注意优先级：先判断 '比'/'率'/'占比'，再判断 '广告费'/'费用'
-                            # 这样 '广告费占比' 就会走百分比格式，而 '产品总广告费' 走整数格式
-                            
-                            # 修正判断逻辑顺序：
                             if any(x in c_str for x in ['比', '率', '占比']):
                                 format_dict[col] = safe_fmt_pct
                             elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
                                 format_dict[col] = safe_fmt_int
-                                
                         return format_dict
 
                     def apply_visual_style(df, cols_to_color, is_sheet2=False):
@@ -339,6 +330,11 @@ else:
                                 return styles
                             styler = styler.apply(zebra_rows, axis=None)
                             
+                            # 【修改点】对特定列加粗
+                            def bold_cols(x):
+                                return ['font-weight: bold' if col in ['自然销量占比', '总库存'] else '' for col in x.index]
+                            styler = styler.apply(bold_cols, axis=1)
+
                             valid_cols = [c for c in cols_to_color if c in df.columns]
                             if valid_cols:
                                 styler = styler.background_gradient(subset=valid_cols, cmap='RdYlGn', vmin=-10000, vmax=10000)
@@ -404,6 +400,10 @@ else:
                         fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
+                        # 【修改点】新增加粗格式
+                        fmt_pct_bold = wb.add_format({'num_format': '0.0%', 'align': 'center', 'bold': True})
+                        fmt_int_bold = wb.add_format({'num_format': '#,##0', 'align': 'center', 'bold': True})
+                        
                         fmt_grey = wb.add_format({'bg_color': '#BFBFBF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_white = wb.add_format({'bg_color': '#FFFFFF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
@@ -417,16 +417,20 @@ else:
                             for i in range(len(raw_codes)):
                                 if i > 0 and clean_codes[i] != clean_codes[i-1]: is_grey = not is_grey
                                 ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
+                            
                             for i, col in enumerate(df_obj.columns):
                                 c_str = str(col)
                                 width = 12
                                 cell_fmt = None
-                                # 【关键修正】格式化优先级：先占比，后整数
+                                
+                                # 优先判断是否是需要加粗的列
+                                is_bold_col = col in ['自然销量占比', '总库存']
+                                
                                 if any(x in c_str for x in ['比', '率', '占比']):
-                                    cell_fmt = fmt_pct
+                                    cell_fmt = fmt_pct_bold if is_bold_col else fmt_pct
                                     width = 12
                                 elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
-                                    cell_fmt = fmt_int
+                                    cell_fmt = fmt_int_bold if is_bold_col else fmt_int
                                     width = 15
                                 
                                 if cell_fmt: ws.set_column(i, i, width, cell_fmt)
