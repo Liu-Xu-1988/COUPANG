@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (最终版·亏损统计)")
+st.title("📊 Coupang 经营分析看板 (最终版·标签页视图)")
 
 # --- 列号配置 (请根据实际Excel列号修改) ---
 IDX_M_CODE   = 0    # A列: 内部编码
@@ -48,6 +48,7 @@ with st.sidebar:
     st.divider()
     
     st.header("👁️ 视图设置")
+    # 保留高度调节，方便在Tab里看更多行
     table_height = st.slider("表格显示高度 (像素)", 600, 3000, 1500, step=100)
 
     st.divider()
@@ -305,18 +306,14 @@ else:
                     restock = df_sheet3['待补数量'].sum()
                     total_qty = df_sheet2['产品总销量'].sum()
                     
-                    # 【新增】计算广告亏损总金额（最终净利润 < 0 的行求和）
+                    # 广告亏损总金额
                     loss_df = df_sheet2[df_sheet2['最终净利润'] < 0]
                     ad_loss_total = loss_df['最终净利润'].sum()
                     
                     st.subheader("📈 经营概览")
-                    # 扩展为 6 列
                     k1, k2, k3, k4, k5, k6 = st.columns(6)
                     k1.metric("💰 最终净利润", f"{net_profit:,.0f}", delta_color="normal" if net_profit>0 else "inverse")
-                    
-                    # 【新增】显示亏损金额
                     k2.metric("💸 广告亏损金额", f"¥ {ad_loss_total:,.0f}", delta="需重点优化", delta_color="inverse")
-                    
                     k3.metric("📦 总销售数量", f"{total_qty:,.0f}")
                     k4.metric("🏭 库存总货值", f"¥ {inv_val:,.0f}")
                     k5.metric("🔴 滞销资金", f"¥ {dead_val:,.0f}", delta="风险", delta_color="inverse")
@@ -415,22 +412,24 @@ else:
                             return styler
                         except: return df
 
-                    # 默认使用瀑布流
-                    st.markdown("### 📝 1. 利润分析")
-                    st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=table_height, hide_index=True)
+                    # 【关键还原】恢复使用 Tabs
+                    tab1, tab2, tab3 = st.tabs(["📝 利润分析", "📊 业务报表", "🏭 库存分析"])
                     
-                    st.markdown("### 📊 2. 业务报表")
-                    st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], True), use_container_width=True, height=table_height, hide_index=True)
+                    with tab1:
+                        st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=table_height, hide_index=True)
                     
-                    st.markdown("### 🏭 3. 库存分析")
-                    try:
-                        st_inv = apply_inventory_style(df_sheet3)
-                        st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
-                                       .bar(subset=['库存货值'], color='#2ca02c')\
-                                       .bar(subset=['滞销库存货值'], color='#880e4f')
-                        st.dataframe(st_inv, use_container_width=True, height=table_height, hide_index=True)
-                    except:
-                        st.dataframe(df_sheet3, use_container_width=True, hide_index=True)
+                    with tab2:
+                        st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], True), use_container_width=True, height=table_height, hide_index=True)
+                    
+                    with tab3:
+                        try:
+                            st_inv = apply_inventory_style(df_sheet3)
+                            st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
+                                           .bar(subset=['库存货值'], color='#2ca02c')\
+                                           .bar(subset=['滞销库存货值'], color='#880e4f')
+                            st.dataframe(st_inv, use_container_width=True, height=table_height, hide_index=True)
+                        except:
+                            st.dataframe(df_sheet3, use_container_width=True, hide_index=True)
 
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
