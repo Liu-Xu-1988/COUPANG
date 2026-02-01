@@ -116,7 +116,6 @@ if file_master and files_sales and files_ads:
                     inv_list = [read_file_strict(f) for f in files_inv]
                     df_inv_all = pd.concat(inv_list, ignore_index=True)
                     
-                    # 匹配逻辑：库存C列(ID) 对 基础表D列(SKU)
                     df_inv_all['_MATCH_SKU'] = clean_for_match(df_inv_all.iloc[:, IDX_I_ID])
                     df_inv_all['库存数量'] = clean_num(df_inv_all.iloc[:, IDX_I_QTY])
                     
@@ -129,7 +128,7 @@ if file_master and files_sales and files_ads:
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
                 
-                # 5.2 关联库存 (生成 Sheet3 数据源)
+                # 5.2 关联库存
                 df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['库存数量'] = df_final['库存数量'].fillna(0).astype(int)
 
@@ -160,7 +159,6 @@ if file_master and files_sales and files_ads:
                     lambda x: x['自然销量'] / x['产品总销量'] if x['产品总销量'] != 0 else 0, axis=1
                 )
                 
-                # Sheet2 列顺序
                 cols_order_s2 = [
                     col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', 
                     '广告/毛利比', '产品总销量', '产品广告销量', '自然销量', '自然销量占比'
@@ -171,6 +169,8 @@ if file_master and files_sales and files_ads:
                 # 保留 Master 前 13 列 (A-M) + 库存数量 (N)
                 cols_master_AM = df_final.columns[:13].tolist() 
                 df_sheet3 = df_final[cols_master_AM + ['库存数量']].copy()
+                # 【修改点】重命名表头
+                df_sheet3.rename(columns={'库存数量': '火箭仓库存数量'}, inplace=True)
 
                 # --- Step 7: 清理辅助列 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
@@ -215,10 +215,12 @@ if file_master and files_sales and files_ads:
                     st.dataframe(try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3)")
-                    # 如果没有 matplotlib，这行会退化为普通表格，不会报错
+                    st.caption("库存分析 (Sheet3) - N列为：火箭仓库存数量")
                     try:
-                        st.dataframe(df_sheet3.style.format(precision=0).bar(subset=['库存数量'], color='#5fba7d'), use_container_width=True, height=600)
+                        st.dataframe(
+                            df_sheet3.style.format(precision=0).bar(subset=['火箭仓库存数量'], color='#5fba7d'),
+                            use_container_width=True, height=600
+                        )
                     except:
                         st.dataframe(df_sheet3, use_container_width=True)
 
@@ -236,12 +238,11 @@ if file_master and files_sales and files_ads:
                     fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                     fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                     
-                    # 定义斑马纹格式
+                    # 斑马纹格式
                     base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                     fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                     fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
 
-                    # 辅助函数：应用斑马纹 (这里就是刚才报错的地方，现已修复)
                     def apply_zebra(sheet_name, df_obj, target_col_idx_for_group=0):
                         ws = writer.sheets[sheet_name]
                         for i, col in enumerate(df_obj.columns):
@@ -252,12 +253,10 @@ if file_master and files_sales and files_ads:
                         clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                         is_grey = False
                         for i in range(len(raw_codes)):
-                            # 修复点：加上了 [i-1]:
                             if i > 0 and clean_codes[i] != clean_codes[i-1]:
                                 is_grey = not is_grey
                             ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
                     
-                    # 应用样式
                     apply_zebra('利润分析', df_final, IDX_M_CODE)
                     apply_zebra('库存分析', df_sheet3, IDX_M_CODE)
 
