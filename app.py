@@ -7,34 +7,28 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (长窗口浏览版)")
+st.title("📊 Coupang 经营分析看板 (交互优化版)")
 
 # --- 列号配置 ---
-# Master表 (基础表)
-IDX_M_CODE   = 0    # A列: 内部编码
-IDX_M_SKU    = 3    # D列: SKU ID (用于匹配火箭仓)
-IDX_M_COST   = 6    # G列: 采购价格 (RMB)
-IDX_M_PROFIT = 10   # K列: 单品毛利
-IDX_M_BAR    = 12   # M列: ID号码 (用于匹配极风库存)
+IDX_M_CODE   = 0    # A列
+IDX_M_SKU    = 3    # D列
+IDX_M_COST   = 6    # G列
+IDX_M_PROFIT = 10   # K列
+IDX_M_BAR    = 12   # M列
 
-# Sales表 (销售表)
 IDX_S_ID     = 0    # A列
 IDX_S_QTY    = 8    # I列
 
-# Ads表 (广告表)
 IDX_A_CAMPAIGN = 5  # F列
 IDX_A_GROUP    = 6  # G列
 IDX_A_SPEND    = 15 # P列
-IDX_A_SALES    = 29 # AD列 (30列)
+IDX_A_SALES    = 29 # AD列
 
-# Inventory Rocket (火箭仓)
-IDX_I_R_ID   = 2    # C列: ID
-IDX_I_R_QTY  = 7    # H列: 库存数量
+IDX_I_R_ID   = 2    # C列
+IDX_I_R_QTY  = 7    # H列
 
-# Inventory Jifeng (极风)
-IDX_I_J_BAR  = 2    # C列: 产品条码
-IDX_I_J_QTY  = 10   # K列: 数值
-# -----------------
+IDX_I_J_BAR  = 2    # C列
+IDX_I_J_QTY  = 10   # K列
 
 # ==========================================
 # 2. 侧边栏 (含筛选 & 上传)
@@ -53,16 +47,16 @@ with st.sidebar:
     st.divider()
     
     st.header("📂 数据源上传")
-    st.info("请按顺序上传以下文件：")
+    st.info("⚠️ 前3个为必传项，后2个为选传项")
     
-    file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx', 'xlsm'])
-    files_sales = st.file_uploader("2. 销售表 (Sales - 近1周数据)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
-    files_ads = st.file_uploader("3. 广告表 (Ads)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['csv', 'xlsx', 'xlsm'])
+    files_sales = st.file_uploader("2. 销售表 (Sales) *必传", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    files_ads = st.file_uploader("3. 广告表 (Ads) *必传", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_inv = st.file_uploader("4. 库存信息表 (火箭仓 Rocket)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_inv_j = st.file_uploader("5. 库存信息表 (极风OMS)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
-# 3. 清洗工具函数
+# 3. 工具函数
 # ==========================================
 def clean_for_match(series):
     return series.astype(str).str.replace(r'\.0$', '', regex=True).str.replace('"', '').str.strip().str.upper()
@@ -88,12 +82,22 @@ def read_file_strict(file):
         return pd.read_csv(file, dtype=str, encoding='gbk')
 
 # ==========================================
-# 4. 主逻辑
+# 4. 主逻辑 (交互修复)
 # ==========================================
-if file_master and files_sales and files_ads:
-    st.divider()
-    
-    btn_label = "🚀 生成完美报表"
+st.divider()
+
+# --- 检查必要文件 ---
+missing_files = []
+if not file_master: missing_files.append("1.基础信息表")
+if not files_sales: missing_files.append("2.销售表")
+if not files_ads: missing_files.append("3.广告表")
+
+if missing_files:
+    # 如果缺文件，显示黄色警告，而不是隐藏按钮
+    st.warning(f"👉 请在左侧上传必要文件后开始分析。当前缺失：{'、'.join(missing_files)}")
+else:
+    # 文件齐全，显示按钮
+    btn_label = "🚀 开始生成报表"
     filters_applied = []
     if filter_code: filters_applied.append(f"编号:{filter_code}")
     if filter_profit != "全部显示": filters_applied.append(f"{filter_profit}")
@@ -103,15 +107,14 @@ if file_master and files_sales and files_ads:
     
     if st.button(btn_label, type="primary", use_container_width=True):
         try:
-            with st.spinner("正在进行多维数据计算..."):
+            with st.spinner("正在全速计算中..."):
                 
-                # --- Step 1: 基础表 ---
+                # --- Step 1: 读取基础表 ---
                 df_master = read_file_strict(file_master)
-                # 强制只取前13列 (A-M)
+                # 强制只取前13列
                 df_master_clean = df_master.iloc[:, :13].copy()
                 col_code_name = df_master.columns[IDX_M_CODE]
 
-                # 辅助计算表
                 df_calc = df_master.copy()
                 df_calc['_MATCH_SKU'] = clean_for_match(df_calc.iloc[:, IDX_M_SKU])
                 df_calc['_MATCH_BAR'] = clean_for_match(df_calc.iloc[:, IDX_M_BAR])
@@ -124,7 +127,6 @@ if file_master and files_sales and files_ads:
                 df_sales_all = pd.concat(sales_list, ignore_index=True)
                 df_sales_all['_MATCH_SKU'] = clean_for_match(df_sales_all.iloc[:, IDX_S_ID])
                 df_sales_all['销量'] = clean_num(df_sales_all.iloc[:, IDX_S_QTY])
-                
                 sales_agg = df_sales_all.groupby('_MATCH_SKU')['销量'].sum().reset_index()
                 sales_agg.rename(columns={'销量': 'SKU销量'}, inplace=True) 
 
@@ -136,7 +138,6 @@ if file_master and files_sales and files_ads:
                 df_ads_all['Code_Group'] = df_ads_all.iloc[:, IDX_A_GROUP].apply(extract_code_from_text)
                 df_ads_all['Code_Campaign'] = df_ads_all.iloc[:, IDX_A_CAMPAIGN].apply(extract_code_from_text)
                 df_ads_all['_MATCH_CODE'] = df_ads_all['Code_Group'].fillna(df_ads_all['Code_Campaign'])
-
                 valid_ads = df_ads_all.dropna(subset=['_MATCH_CODE'])
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
@@ -160,7 +161,7 @@ if file_master and files_sales and files_ads:
                 else:
                     inv_j_agg = pd.DataFrame(columns=['_MATCH_BAR', '极风库存'])
 
-                # --- Step 5: 关联 & 计算 ---
+                # --- Step 5: 计算 ---
                 df_final = pd.merge(df_calc, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['SKU销量'] = df_final['SKU销量'].fillna(0).astype(int)
                 
@@ -170,22 +171,18 @@ if file_master and files_sales and files_ads:
                 df_final = pd.merge(df_final, inv_j_agg, on='_MATCH_BAR', how='left', sort=False)
                 df_final['极风库存'] = df_final['极风库存'].fillna(0).astype(int)
 
-                # 5.3 利润
                 df_final['P列_SKU总毛利'] = df_final['SKU销量'] * df_final['_VAL_PROFIT']
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['SKU销量'].transform('sum')
                 
-                # 5.4 广告
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
-                
-                # 5.5 净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # --- Step 6: 报表生成 ---
+                # --- Step 6: 报表构造 ---
                 
-                # Sheet2: 业务报表
+                # Sheet2
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
                 df_final['产品_总库存'] = df_final['产品_火箭仓库存'] + df_final['产品_极风库存']
@@ -214,8 +211,7 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
-                # --- Step 7: 库存分析表 (Sheet3) ---
-                
+                # Sheet3
                 df_final['火箭仓库存数量'] = df_final['火箭仓库存']
                 df_final['总库存'] = df_final['火箭仓库存数量'] + df_final['极风库存']
                 df_final['库存货值'] = df_final['总库存'] * df_final['_VAL_COST'] * 1.2
@@ -236,16 +232,13 @@ if file_master and files_sales and files_ads:
                 
                 df_final['滞销库存货值'] = df_final.apply(calc_dead_stock_value, axis=1)
 
-                # --- Step 8: 深度清洗与重命名 ---
                 cols_master_AM = df_master.columns[:13].tolist()
                 
-                # 构造 Sheet1 列
                 cols_s1_final = cols_master_AM + [
                     'SKU销量', 'P列_SKU总毛利', 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润'
                 ]
                 df_final_clean = df_final[cols_s1_final].copy()
 
-                # 构造 Sheet3 列
                 cols_inv_final = cols_master_AM + [
                     '火箭仓库存数量', '极风库存', '总库存', 
                     '库存货值', '滞销库存货值', 
@@ -261,14 +254,10 @@ if file_master and files_sales and files_ads:
                     'R列_产品总广告费': '产品总广告费',
                     'S列_最终净利润': '最终净利润'
                 }
-                
                 df_final_clean.rename(columns=rename_dict, inplace=True)
                 df_sheet2.rename(columns=rename_dict, inplace=True)
 
-                # ==========================================
-                # 🔍 Step 9: 执行筛选
-                # ==========================================
-                
+                # --- 筛选 ---
                 if filter_code:
                     df_final_clean = df_final_clean[df_final_clean[col_code_name].astype(str).str.contains(filter_code, na=False)]
                     df_sheet2 = df_sheet2[df_sheet2[col_code_name].astype(str).str.contains(filter_code, na=False)]
@@ -279,7 +268,6 @@ if file_master and files_sales and files_ads:
                     valid_indices = df_final_clean.index
                     df_sheet3 = df_sheet3.loc[df_sheet3.index.isin(valid_indices)]
                     df_sheet2 = df_sheet2[df_sheet2['最终净利润'] > 0]
-                    
                 elif filter_profit == "只看亏损 (<0)":
                     df_final_clean = df_final_clean[df_final_clean['最终净利润'] < 0]
                     valid_indices = df_final_clean.index
@@ -287,37 +275,29 @@ if file_master and files_sales and files_ads:
                     df_sheet2 = df_sheet2[df_sheet2['最终净利润'] < 0]
 
                 # ==========================================
-                # 🔥 看板展示
+                # 🔥 展示
                 # ==========================================
-                
                 if df_sheet2.empty:
-                    st.warning(f"⚠️ 筛选结果为空。")
+                    st.warning("⚠️ 筛选结果为空")
                 else:
-                    total_qty = df_sheet2['产品总销量'].sum()
+                    # 算 KPI
                     net_profit = df_sheet2['最终净利润'].sum()
-                    inv_value_total = df_sheet3['库存货值'].sum()
-                    dead_stock_value = df_sheet3['滞销库存货值'].sum()
-                    total_restock = df_sheet3['待补数量'].sum()
+                    inv_val = df_sheet3['库存货值'].sum()
+                    dead_val = df_sheet3['滞销库存货值'].sum()
+                    restock = df_sheet3['待补数量'].sum()
                     
-                    title_suffix = ""
-                    if filter_code: title_suffix += f" [编号:{filter_code}]"
-                    if filter_profit != "全部显示": title_suffix += f" [{filter_profit}]"
-                    
-                    st.subheader(f"📈 经营概览 {title_suffix}")
-                    k1, k2, k3, k4, k5 = st.columns(5)
-                    profit_color = "normal" if net_profit > 0 else "inverse"
-                    
-                    k1.metric("💰 最终净利润", f"{net_profit:,.0f}", delta_color=profit_color)
-                    k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
-                    k3.metric("🏭 库存总货值", f"¥ {inv_value_total:,.0f}")
-                    k4.metric("🔴 滞销资金占用", f"¥ {dead_stock_value:,.0f}", delta="需重点清理", delta_color="inverse")
-                    k5.metric("🚨 建议补货量", f"{total_restock:,.0f}")
+                    st.subheader("📈 经营概览")
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.metric("💰 最终净利润", f"{net_profit:,.0f}", delta_color="normal" if net_profit>0 else "inverse")
+                    k2.metric("🏭 库存总货值", f"¥ {inv_val:,.0f}")
+                    k3.metric("🔴 滞销资金", f"¥ {dead_val:,.0f}", delta="风险", delta_color="inverse")
+                    k4.metric("🚨 待补数量", f"{restock:,.0f}")
 
                     st.divider()
 
-                    tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析"])
+                    tab1, tab2, tab3 = st.tabs(["📝 利润分析", "📊 业务报表", "🏭 库存分析"])
                     
-                    # === 格式化函数 ===
+                    # 样式函数
                     def safe_fmt_int(x):
                         try:
                             if pd.isna(x) or x == '': return ""
@@ -352,8 +332,9 @@ if file_master and files_sales and files_ads:
                                 styles.loc[is_odd, :] = 'background-color: #f0f2f6' 
                                 return styles
                             styler = styler.apply(zebra_rows, axis=None)
-                            if not df.empty and 'S列_最终净利润' in df.columns:
-                                styler = styler.background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000)
+                            # 利润色阶
+                            if '最终净利润' in df.columns:
+                                styler = styler.background_gradient(subset=['最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000)
                             return styler
                         except: return df
                     
@@ -388,24 +369,15 @@ if file_master and files_sales and files_ads:
                                         except: pass
                                     styles.append(style)
                                 return styles
-
                             styler = styler.apply(highlight_logic, axis=1)
                             return styler
                         except: return df
 
                     with tab1:
-                        st.caption("利润明细 (Sheet1)")
-                        # 【修改点】高度调整为 1500
-                        st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=1500)
-                    
+                        st.dataframe(apply_visual_style(df_final_clean, []), use_container_width=True, height=1500)
                     with tab2:
-                        st.caption("业务汇总 (Sheet2)")
-                        # 【修改点】高度调整为 1500
-                        st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], is_sheet2=True), use_container_width=True, height=1500)
-                    
+                        st.dataframe(apply_visual_style(df_sheet2, [], True), use_container_width=True, height=1500)
                     with tab3:
-                        st.caption("库存分析 (Sheet3)")
-                        # 【修改点】高度调整为 1500
                         try:
                             st_inv = apply_inventory_style(df_sheet3)
                             st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
@@ -415,9 +387,7 @@ if file_master and files_sales and files_ads:
                         except:
                             st.dataframe(df_sheet3, use_container_width=True)
 
-                    # ==========================================
-                    # 📥 下载逻辑 (Excel 格式精细化)
-                    # ==========================================
+                    # 下载按钮 (只在数据生成成功后显示)
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         df_final_clean.to_excel(writer, index=False, sheet_name='利润分析')
@@ -425,19 +395,9 @@ if file_master and files_sales and files_ads:
                         df_sheet3.to_excel(writer, index=False, sheet_name='库存分析')
                         
                         wb = writer.book
-                        # 表头样式：加粗、蓝底、白字、边框
-                        fmt_header = wb.add_format({
-                            'bold': True, 
-                            'bg_color': '#4472C4', 
-                            'font_color': 'white', 
-                            'border': 1, 
-                            'align': 'center',
-                            'valign': 'vcenter'
-                        })
-                        
+                        fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
-                        
                         base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                         fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                         fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
@@ -448,10 +408,8 @@ if file_master and files_sales and files_ads:
                             clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                             is_grey = False
                             for i in range(len(raw_codes)):
-                                if i > 0 and clean_codes[i] != clean_codes[i-1]:
-                                    is_grey = not is_grey
+                                if i > 0 and clean_codes[i] != clean_codes[i-1]: is_grey = not is_grey
                                 ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
-
                             for i, col in enumerate(df_obj.columns):
                                 c_str = str(col)
                                 width = 12
@@ -463,26 +421,18 @@ if file_master and files_sales and files_ads:
                                 elif any(x in c_str for x in ['比', '率', '占比']):
                                     cell_fmt = fmt_pct
                                     width = 12
-                                
-                                if cell_fmt:
-                                    ws.set_column(i, i, width, cell_fmt)
-                                else:
-                                    ws.set_column(i, i, width)
-                                
-                                # 强制写入表头（覆盖默认）
+                                if cell_fmt: ws.set_column(i, i, width, cell_fmt)
+                                else: ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
 
                         set_sheet_format('利润分析', df_final_clean, IDX_M_CODE)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
                         set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
 
-                    st.divider()
-                    st.success(f"✅ 报表生成完毕！")
-                    
                     st.download_button(
                         label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                         data=output.getvalue(),
-                        file_name=f"Coupang_Report_Final_{filter_code if filter_code else 'All'}.xlsx",
+                        file_name=f"Coupang_Report_{filter_code if filter_code else 'All'}.xlsx",
                         mime="application/vnd.ms-excel",
                         type="primary",
                         use_container_width=True
@@ -490,5 +440,3 @@ if file_master and files_sales and files_ads:
 
         except Exception as e:
             st.error(f"❌ 运行出错: {e}")
-else:
-    st.info("👈 请上传文件")
