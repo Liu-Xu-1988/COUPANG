@@ -6,14 +6,15 @@ import re
 # ==========================================
 # 1. 页面配置 (宽屏)
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (含库存)")
-st.title("📊 Coupang 经营分析看板 (全功能版+库存)")
+st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (双库存版)")
+st.title("📊 Coupang 经营分析看板 (双库存版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
 IDX_M_CODE   = 0    # A列: 内部编码
-IDX_M_SKU    = 3    # D列: SKU ID (用于匹配库存)
+IDX_M_SKU    = 3    # D列: SKU ID (匹配火箭仓)
 IDX_M_PROFIT = 10   # K列: 单品毛利
+IDX_M_BARCODE= 12   # M列: ID号码 (匹配极风库存) <-- 新增匹配键
 
 # Sales表 (销售表)
 IDX_S_ID     = 0    # A列
@@ -23,11 +24,15 @@ IDX_S_QTY    = 8    # I列
 IDX_A_CAMPAIGN = 5  # F列
 IDX_A_GROUP    = 6  # G列
 IDX_A_SPEND    = 15 # P列
-IDX_A_SALES    = 29 # AD列 (30列)
+IDX_A_SALES    = 29 # AD列
 
-# Inventory表 (库存表)
-IDX_I_ID     = 2    # C列: ID
-IDX_I_QTY    = 7    # H列: 库存数量
+# Inventory Rocket (火箭仓)
+IDX_I_R_ID   = 2    # C列: ID
+IDX_I_R_QTY  = 7    # H列: 库存
+
+# Inventory Jifeng (极风 - 新增!)
+IDX_I_J_BAR  = 2    # C列: 产品条码
+IDX_I_J_QTY  = 10   # K列: 数值
 # -----------------
 
 # ==========================================
@@ -40,7 +45,9 @@ with st.sidebar:
     file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx', 'xlsm'])
     files_sales = st.file_uploader("2. 销售表 (Sales)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_ads = st.file_uploader("3. 广告表 (Ads)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
-    files_inv = st.file_uploader("4. 库存信息表 (Inventory)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    files_inv_r = st.file_uploader("4. 火箭仓库存表 (Rocket)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    # 新增上传
+    files_inv_j = st.file_uploader("5. 极风库存表 (Jifeng)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
 # 3. 清洗工具函数
@@ -74,15 +81,18 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    if st.button("🚀 生成全套报表 (含库存)", type="primary", use_container_width=True):
+    if st.button("🚀 生成双库存报表", type="primary", use_container_width=True):
         try:
-            with st.spinner("正在全速处理数据..."):
+            with st.spinner("正在处理多维数据..."):
                 
                 # --- Step 1: 基础表 ---
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
 
-                df_master['_MATCH_SKU'] = clean_for_match(df_master.iloc[:, IDX_M_SKU])
+                # 关键：生成两个匹配键
+                df_master['_MATCH_SKU'] = clean_for_match(df_master.iloc[:, IDX_M_SKU])     # 用于销售和火箭仓
+                df_master['_MATCH_BAR'] = clean_for_match(df_master.iloc[:, IDX_M_BARCODE]) # 用于极风库存 (M列)
+                
                 df_master['_MATCH_CODE'] = clean_for_match(df_master.iloc[:, IDX_M_CODE])
                 df_master['_VAL_PROFIT'] = clean_num(df_master.iloc[:, IDX_M_PROFIT])
 
@@ -111,38 +121,52 @@ if file_master and files_sales and files_ads:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
-                # --- Step 4: 库存表处理 ---
-                if files_inv:
-                    inv_list = [read_file_strict(f) for f in files_inv]
-                    df_inv_all = pd.concat(inv_list, ignore_index=True)
-                    
-                    df_inv_all['_MATCH_SKU'] = clean_for_match(df_inv_all.iloc[:, IDX_I_ID])
-                    df_inv_all['库存数量'] = clean_num(df_inv_all.iloc[:, IDX_I_QTY])
-                    
-                    inv_agg = df_inv_all.groupby('_MATCH_SKU')['库存数量'].sum().reset_index()
+                # --- Step 4.1: 火箭仓库存 (Rocket) ---
+                if files_inv_r:
+                    inv_r_list = [read_file_strict(f) for f in files_inv_r]
+                    df_inv_r = pd.concat(inv_r_list, ignore_index=True)
+                    # 匹配逻辑：C列 ID -> 基础表 SKU (D列)
+                    df_inv_r['_MATCH_SKU'] = clean_for_match(df_inv_r.iloc[:, IDX_I_R_ID])
+                    df_inv_r['火箭仓库存'] = clean_num(df_inv_r.iloc[:, IDX_I_R_QTY])
+                    inv_r_agg = df_inv_r.groupby('_MATCH_SKU')['火箭仓库存'].sum().reset_index()
                 else:
-                    inv_agg = pd.DataFrame(columns=['_MATCH_SKU', '库存数量'])
+                    inv_r_agg = pd.DataFrame(columns=['_MATCH_SKU', '火箭仓库存'])
+
+                # --- Step 4.2: 极风库存 (Jifeng) - 新增 ---
+                if files_inv_j:
+                    inv_j_list = [read_file_strict(f) for f in files_inv_j]
+                    df_inv_j = pd.concat(inv_j_list, ignore_index=True)
+                    # 匹配逻辑：C列 条码 -> 基础表 ID号码 (M列)
+                    df_inv_j['_MATCH_BAR'] = clean_for_match(df_inv_j.iloc[:, IDX_I_J_BAR])
+                    df_inv_j['极风库存'] = clean_num(df_inv_j.iloc[:, IDX_I_J_QTY])
+                    inv_j_agg = df_inv_j.groupby('_MATCH_BAR')['极风库存'].sum().reset_index()
+                else:
+                    inv_j_agg = pd.DataFrame(columns=['_MATCH_BAR', '极风库存'])
 
                 # --- Step 5: 关联 & 计算 ---
                 # 5.1 基础 + 销售
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
                 
-                # 5.2 关联库存
-                df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
-                df_final['库存数量'] = df_final['库存数量'].fillna(0).astype(int)
+                # 5.2 关联 火箭仓库存 (按 SKU)
+                df_final = pd.merge(df_final, inv_r_agg, on='_MATCH_SKU', how='left', sort=False)
+                df_final['火箭仓库存'] = df_final['火箭仓库存'].fillna(0).astype(int)
+                
+                # 5.3 关联 极风库存 (按 M列 Barcode) <-- 新增关联
+                df_final = pd.merge(df_final, inv_j_agg, on='_MATCH_BAR', how='left', sort=False)
+                df_final['极风库存'] = df_final['极风库存'].fillna(0).astype(int)
 
-                # 5.3 利润计算
+                # 5.4 利润计算
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['O列_合并销量'].transform('sum')
                 
-                # 5.4 关联广告
+                # 5.5 关联广告
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
                 
-                # 5.5 净利计算
+                # 5.6 净利计算
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
                 # --- Step 6: 报表生成 ---
@@ -166,13 +190,16 @@ if file_master and files_sales and files_ads:
                 df_sheet2 = df_sheet2[cols_order_s2]
 
                 # Sheet3: 库存分析
-                # 保留 Master 前 13 列 (A-M) + 库存数量 (N)
+                # 保留 Master 前 13 列 (A-M) + 火箭仓 + 极风
                 cols_master_AM = df_final.columns[:13].tolist() 
-                df_sheet3 = df_final[cols_master_AM + ['库存数量']].copy()
-                # 【修改点】重命名表头
-                df_sheet3.rename(columns={'库存数量': '火箭仓库存数量'}, inplace=True)
+                # 拼装顺序：基础信息 -> 火箭仓 -> 极风
+                df_sheet3 = df_final[cols_master_AM + ['火箭仓库存', '极风库存']].copy()
+                
+                # 重命名表头 (确保输出名称准确)
+                df_sheet3.rename(columns={'火箭仓库存': '火箭仓库存数量'}, inplace=True)
+                # 极风库存已经在 merge 时叫 '极风库存' 了，不用改
 
-                # --- Step 7: 清理辅助列 ---
+                # --- Step 7: 清理 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
@@ -182,18 +209,20 @@ if file_master and files_sales and files_ads:
                 
                 total_qty = df_sheet2['产品总销量'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
-                total_inv = df_final['库存数量'].sum()
+                inv_rocket = df_final['火箭仓库存'].sum()
+                inv_jifeng = df_final['极风库存'].sum()
+                total_inv = inv_rocket + inv_jifeng
                 
                 st.subheader("📈 经营概览")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
                 k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
-                k3.metric("🏭 总库存量", f"{total_inv:,.0f}")
-                k4.metric("📊 动销率", f"{(total_qty/total_inv if total_inv else 0):.1%}")
+                k3.metric("🏭 总库存 (火+极)", f"{total_inv:,.0f}")
+                k4.metric("📊 整体动销率", f"{(total_qty/total_inv if total_inv else 0):.1%}")
 
                 st.divider()
 
-                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)", "🏭 3. 库存分析 (明细)"])
+                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析 (双仓)"])
                 
                 def try_style(df, cols, is_sheet2=False):
                     try:
@@ -215,10 +244,12 @@ if file_master and files_sales and files_ads:
                     st.dataframe(try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3) - N列为：火箭仓库存数量")
+                    st.caption("库存分析 (Sheet3) - 包含：火箭仓库存数量、极风库存")
                     try:
                         st.dataframe(
-                            df_sheet3.style.format(precision=0).bar(subset=['火箭仓库存数量'], color='#5fba7d'),
+                            df_sheet3.style.format(precision=0)
+                            .bar(subset=['火箭仓库存数量'], color='#5fba7d')
+                            .bar(subset=['极风库存'], color='#4472c4'),
                             use_container_width=True, height=600
                         )
                     except:
@@ -275,7 +306,7 @@ if file_master and files_sales and files_ads:
                 st.download_button(
                     label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                     data=output.getvalue(),
-                    file_name="Coupang_Full_Report.xlsx",
+                    file_name="Coupang_Full_Report_Dual_Stock.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
