@@ -7,12 +7,13 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能完美版)")
+st.title("📊 Coupang 经营分析看板 (全功能·财务库存版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
 IDX_M_CODE   = 0    # A列: 内部编码
 IDX_M_SKU    = 3    # D列: SKU ID (用于匹配火箭仓)
+IDX_M_COST   = 6    # G列: 采购价格 (RMB) <--- 新增配置
 IDX_M_PROFIT = 10   # K列: 单品毛利
 IDX_M_BAR    = 12   # M列: ID号码 (用于匹配极风库存)
 
@@ -80,7 +81,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    if st.button("🚀 生成完美报表", type="primary", use_container_width=True):
+    if st.button("🚀 生成报表 (含库存货值计算)", type="primary", use_container_width=True):
         try:
             with st.spinner("正在进行多维数据计算..."):
                 
@@ -92,6 +93,8 @@ if file_master and files_sales and files_ads:
                 df_master['_MATCH_BAR'] = clean_for_match(df_master.iloc[:, IDX_M_BAR])
                 df_master['_MATCH_CODE'] = clean_for_match(df_master.iloc[:, IDX_M_CODE])
                 df_master['_VAL_PROFIT'] = clean_num(df_master.iloc[:, IDX_M_PROFIT])
+                # 新增读取采购成本
+                df_master['_VAL_COST'] = clean_num(df_master.iloc[:, IDX_M_COST])
 
                 # --- Step 2: 销售表 ---
                 sales_list = [read_file_strict(f) for f in files_sales]
@@ -165,20 +168,18 @@ if file_master and files_sales and files_ads:
 
                 # --- Step 6: 报表生成 ---
                 
-                # Sheet2: 业务报表 (产品维度)
+                # Sheet2: 业务报表
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
-                # 【新增】计算产品维度的总库存
                 df_final['产品_总库存'] = df_final['产品_火箭仓库存'] + df_final['产品_极风库存']
 
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量', '产品_火箭仓库存', '产品_极风库存', '产品_总库存']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
                 
-                # 重命名
                 df_sheet2.rename(columns={
                     '产品_火箭仓库存': '火箭仓库存', 
                     '产品_极风库存': '极风库存',
-                    '产品_总库存': '总库存' # <--- 新增
+                    '产品_总库存': '总库存'
                 }, inplace=True)
 
                 df_sheet2['广告/毛利比'] = df_sheet2.apply(
@@ -189,11 +190,10 @@ if file_master and files_sales and files_ads:
                     lambda x: x['自然销量'] / x['产品总销量'] if x['产品总销量'] != 0 else 0, axis=1
                 )
                 
-                # Sheet2 最终列顺序 (总库存加在最后)
                 cols_order_s2 = [
                     col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', 
                     '广告/毛利比', '产品总销量', '产品广告销量', '自然销量', '自然销量占比',
-                    '火箭仓库存', '极风库存', '总库存' # <--- 新增在最后
+                    '火箭仓库存', '极风库存', '总库存'
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
@@ -201,6 +201,10 @@ if file_master and files_sales and files_ads:
                 
                 df_final['火箭仓库存数量'] = df_final['火箭仓库存']
                 df_final['总库存'] = df_final['火箭仓库存数量'] + df_final['极风库存']
+                
+                # 【新增计算】库存货值 = 总库存 * 采购价 * 1.2
+                df_final['库存货值'] = df_final['总库存'] * df_final['_VAL_COST'] * 1.2
+                
                 df_final['安全库存'] = df_final['SKU销量'] * 3
                 df_final['冗余标准'] = df_final['SKU销量'] * 8
                 
@@ -210,8 +214,10 @@ if file_master and files_sales and files_ads:
                 )
 
                 cols_master_AM = df_final.columns[:13].tolist() 
+                # 最终列顺序：... 总库存 -> 库存货值 -> 待补数量 ...
                 cols_inv_final = cols_master_AM + [
                     '火箭仓库存数量', '极风库存', '总库存', 
+                    '库存货值',  # <--- 新增列
                     '待补数量', 
                     'SKU销量', '安全库存', '冗余标准'
                 ]
@@ -228,18 +234,19 @@ if file_master and files_sales and files_ads:
                 total_qty = df_sheet2['产品总销量'].sum()
                 net_profit = df_sheet2['S列_最终净利润'].sum()
                 inv_total = df_sheet2['总库存'].sum()
-                total_restock = df_sheet3['待补数量'].sum()
+                # 计算总货值
+                inv_value_total = df_sheet3['库存货值'].sum()
                 
                 st.subheader("📈 经营概览")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
                 k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
-                k3.metric("🏭 总库存量", f"{inv_total:,.0f}")
-                k4.metric("🚨 建议补货总量", f"{total_restock:,.0f}", delta="需立即补货", delta_color="inverse")
+                k3.metric("🏭 当前库存总货值", f"¥ {inv_value_total:,.0f}", delta="含关税估算", delta_color="off")
+                k4.metric("🚨 建议补货总量", f"{df_sheet3['待补数量'].sum():,.0f}", delta="需立即补货", delta_color="inverse")
 
                 st.divider()
 
-                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表 (含总库存)", "🏭 3. 库存分析 (健康监控)"])
+                tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析 (含货值)"])
                 
                 def apply_visual_style(df, cols_to_color, is_sheet2=False):
                     try:
@@ -266,7 +273,9 @@ if file_master and files_sales and files_ads:
                 
                 def apply_inventory_style(df):
                     try:
-                        styler = df.style.format(precision=0)
+                        # 格式化金钱列
+                        styler = df.style.format(precision=0).format({'库存货值': '{:,.0f}'})
+                        
                         def zebra_rows(x):
                             codes = x.iloc[:, 0].astype(str)
                             groups = (codes != codes.shift()).cumsum()
@@ -303,16 +312,15 @@ if file_master and files_sales and files_ads:
                     st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                 
                 with tab2:
-                    st.caption("业务汇总 (Sheet2) - 已添加【总库存】列")
+                    st.caption("业务汇总 (Sheet2)")
                     st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3)")
+                    st.caption("库存分析 (Sheet3) - 新增列：库存货值 (G列成本*1.2*库存)")
                     try:
                         st_inv = apply_inventory_style(df_sheet3)
                         st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
-                                       .bar(subset=['安全库存'], color='#ffd700')\
-                                       .bar(subset=['冗余标准'], color='#ff6347')
+                                       .bar(subset=['库存货值'], color='#2ca02c') # 货值用绿色条
                         st.dataframe(st_inv, use_container_width=True, height=600)
                     except:
                         st.dataframe(df_sheet3, use_container_width=True)
@@ -359,7 +367,13 @@ if file_master and files_sales and files_ads:
                     ws2.set_column(4, 4, 15, fmt_pct)
                     ws2.set_column(5, 7, 15, fmt_money)
                     ws2.set_column(8, 8, 15, fmt_pct)
-                    ws2.set_column(9, 11, 15, fmt_money) # 扩展到第12列(总库存)
+                    ws2.set_column(9, 11, 15, fmt_money)
+
+                    # Sheet3 库存分析单独设置“库存货值”列宽和格式
+                    ws3 = writer.sheets['库存分析']
+                    # 库存货值是第 13+3 = 16列 (0-based 16 -> Q列)
+                    # cols_inv_final = 13(Master) + 火箭 + 极风 + 总库存 + 货值(Index 16)
+                    ws3.set_column(16, 16, 18, fmt_money)
 
                 st.divider()
                 st.success("✅ 报表生成完毕！")
@@ -367,7 +381,7 @@ if file_master and files_sales and files_ads:
                 st.download_button(
                     label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                     data=output.getvalue(),
-                    file_name="Coupang_Full_Report_v14.xlsx",
+                    file_name="Coupang_Full_Report_v15.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
