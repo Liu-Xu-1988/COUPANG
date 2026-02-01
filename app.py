@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (最终版·精简交互)")
+st.title("📊 Coupang 经营分析看板 (最终版·风险预警)")
 
 # --- 列号配置 ---
 IDX_M_CODE   = 0    # A列
@@ -44,12 +44,6 @@ with st.sidebar:
         index=0
     )
     
-    st.divider()
-    
-    st.header("👁️ 视图设置")
-    # 【修改点】移除了模式选择，仅保留高度调节
-    table_height = st.slider("表格显示高度 (像素)", 600, 3000, 1500, step=100)
-
     st.divider()
     
     st.header("📂 数据源上传")
@@ -104,12 +98,14 @@ else:
     filters_applied = []
     if filter_code: filters_applied.append(f"编号:{filter_code}")
     if filter_profit != "全部显示": filters_applied.append(f"{filter_profit}")
+    
     if filters_applied:
         btn_label += f" (筛选: {' + '.join(filters_applied)})"
     
     if st.button(btn_label, type="primary", use_container_width=True):
         try:
             with st.spinner("正在全速计算中..."):
+                
                 # --- Step 1-5: 数据处理 ---
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
@@ -175,7 +171,7 @@ else:
 
                 # --- Step 6: 报表构造 ---
                 
-                # Sheet2 (业务报表 - 产品维度)
+                # Sheet2 (业务报表)
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
                 df_final['产品_总库存'] = df_final['产品_火箭仓库存'] + df_final['产品_极风库存']
@@ -204,10 +200,11 @@ else:
                     '产品总销量', '产品广告销量', '自然销量', '自然销量占比',
                     '火箭仓库存', '极风库存'
                 ]
+                # 去重列名 (自然销量占比重复了)
                 cols_order_s2 = list(dict.fromkeys(cols_order_s2))
                 df_sheet2 = df_sheet2[cols_order_s2]
 
-                # Sheet3 (库存分析 - SKU维度)
+                # Sheet3 (库存分析)
                 df_final['火箭仓库存数量'] = df_final['火箭仓库存']
                 df_final['总库存'] = df_final['火箭仓库存数量'] + df_final['极风库存']
                 df_final['库存货值'] = df_final['总库存'] * df_final['_VAL_COST'] * 1.2
@@ -229,7 +226,6 @@ else:
 
                 cols_master_AM = df_master.columns[:13].tolist()
                 
-                # Sheet1 (利润分析 - SKU维度)
                 cols_s1_final = cols_master_AM + [
                     'SKU销量', 'P列_SKU总毛利', 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润'
                 ]
@@ -272,16 +268,8 @@ else:
 
                 # 插入序号列
                 df_sheet2.reset_index(drop=True, inplace=True)
-                idx_col_name_s2 = f"产品序号({len(df_sheet2)})"
-                df_sheet2.insert(0, idx_col_name_s2, range(1, len(df_sheet2) + 1))
-
-                df_final_clean.reset_index(drop=True, inplace=True)
-                idx_col_name_s1 = f"SKU序号({len(df_final_clean)})"
-                df_final_clean.insert(0, idx_col_name_s1, range(1, len(df_final_clean) + 1))
-
-                df_sheet3.reset_index(drop=True, inplace=True)
-                idx_col_name_s3 = f"SKU序号({len(df_sheet3)})"
-                df_sheet3.insert(0, idx_col_name_s3, range(1, len(df_sheet3) + 1))
+                idx_col_name = f"产品总数({len(df_sheet2)})"
+                df_sheet2.insert(0, idx_col_name, range(1, len(df_sheet2) + 1))
 
                 # ==========================================
                 # 🔥 看板展示
@@ -305,7 +293,9 @@ else:
 
                     st.divider()
 
-                    # === 样式函数 ===
+                    tab1, tab2, tab3 = st.tabs(["📝 利润分析", "📊 业务报表", "🏭 库存分析"])
+                    
+                    # 样式函数
                     def safe_fmt_int(x):
                         try:
                             if pd.isna(x) or x == '': return ""
@@ -324,7 +314,7 @@ else:
                             c_str = str(col)
                             if any(x in c_str for x in ['比', '率', '占比']):
                                 format_dict[col] = safe_fmt_pct
-                            elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '序号', '广告费']):
+                            elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
                                 format_dict[col] = safe_fmt_int
                         return format_dict
 
@@ -332,7 +322,8 @@ else:
                         try:
                             styler = df.style.format(get_format_dict(df))
                             def zebra_rows(x):
-                                codes = x.iloc[:, 1].astype(str)
+                                col_idx = 1 if is_sheet2 else 0 
+                                codes = x.iloc[:, col_idx].astype(str)
                                 groups = (codes != codes.shift()).cumsum()
                                 is_odd = groups % 2 != 0
                                 styles = pd.DataFrame('', index=x.index, columns=x.columns)
@@ -340,18 +331,25 @@ else:
                                 return styles
                             styler = styler.apply(zebra_rows, axis=None)
                             
+                            # 【修改点】特定列加粗 & 广告占比高亮
                             def highlight_cells(x):
                                 styles = []
                                 for col in x.index:
                                     style = ''
+                                    # 1. 标题加粗
                                     if col in ['自然销量占比', '总库存']:
                                         style += 'font-weight: bold;'
+                                    
+                                    # 2. 广告费占比 > 50% 红色加粗
                                     if col == '广告费占比':
                                         try:
-                                            if x[col] > 0.5: style += 'color: #d32f2f; font-weight: bold;'
+                                            if x[col] > 0.5:
+                                                style += 'color: #d32f2f; font-weight: bold;'
                                         except: pass
+                                    
                                     styles.append(style)
                                 return styles
+                            
                             styler = styler.apply(highlight_cells, axis=1)
 
                             valid_cols = [c for c in cols_to_color if c in df.columns]
@@ -364,7 +362,7 @@ else:
                         try:
                             styler = df.style.format(get_format_dict(df))
                             def zebra_rows(x):
-                                codes = x.iloc[:, 1].astype(str)
+                                codes = x.iloc[:, 0].astype(str)
                                 groups = (codes != codes.shift()).cumsum()
                                 is_odd = groups % 2 != 0
                                 styles = pd.DataFrame('', index=x.index, columns=x.columns)
@@ -395,22 +393,19 @@ else:
                             return styler
                         except: return df
 
-                    # 默认使用瀑布流
-                    st.markdown("### 📝 1. 利润分析")
-                    st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=table_height, hide_index=True)
-                    
-                    st.markdown("### 📊 2. 业务报表")
-                    st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], True), use_container_width=True, height=table_height, hide_index=True)
-                    
-                    st.markdown("### 🏭 3. 库存分析")
-                    try:
-                        st_inv = apply_inventory_style(df_sheet3)
-                        st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
-                                       .bar(subset=['库存货值'], color='#2ca02c')\
-                                       .bar(subset=['滞销库存货值'], color='#880e4f')
-                        st.dataframe(st_inv, use_container_width=True, height=table_height, hide_index=True)
-                    except:
-                        st.dataframe(df_sheet3, use_container_width=True, hide_index=True)
+                    with tab1:
+                        st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=1500)
+                    with tab2:
+                        st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], True), use_container_width=True, height=1500, hide_index=True)
+                    with tab3:
+                        try:
+                            st_inv = apply_inventory_style(df_sheet3)
+                            st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
+                                           .bar(subset=['库存货值'], color='#2ca02c')\
+                                           .bar(subset=['滞销库存货值'], color='#880e4f')
+                            st.dataframe(st_inv, use_container_width=True, height=1500)
+                        except:
+                            st.dataframe(df_sheet3, use_container_width=True)
 
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -424,14 +419,16 @@ else:
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                         fmt_pct_bold = wb.add_format({'num_format': '0.0%', 'align': 'center', 'bold': True})
                         fmt_int_bold = wb.add_format({'num_format': '#,##0', 'align': 'center', 'bold': True})
+                        
+                        # 红色预警格式
                         fmt_red_alert = wb.add_format({'num_format': '0.0%', 'align': 'center', 'bold': True, 'font_color': '#9C0006', 'bg_color': '#FFC7CE'})
+
                         fmt_grey = wb.add_format({'bg_color': '#BFBFBF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                         fmt_white = wb.add_format({'bg_color': '#FFFFFF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
                         def set_sheet_format(sheet_name, df_obj, group_col_idx):
                             ws = writer.sheets[sheet_name]
-                            # 因为加了序号列，所以分组列要后移一位
-                            actual_group_col = group_col_idx + 1
+                            actual_group_col = group_col_idx + 1 if sheet_name == '业务报表' else group_col_idx
                             
                             raw_codes = df_obj.iloc[:, actual_group_col].astype(str).tolist()
                             clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
@@ -444,12 +441,13 @@ else:
                                 c_str = str(col)
                                 width = 12
                                 cell_fmt = None
+                                
                                 is_bold_col = col in ['自然销量占比', '总库存']
                                 
                                 if any(x in c_str for x in ['比', '率', '占比']):
                                     cell_fmt = fmt_pct_bold if is_bold_col else fmt_pct
                                     width = 12
-                                elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '序号', '广告费']):
+                                elif any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补', '总数', '广告费']):
                                     cell_fmt = fmt_int_bold if is_bold_col else fmt_int
                                     width = 15
                                 
@@ -457,8 +455,14 @@ else:
                                 else: ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
                                 
+                                # 【修改点】Excel 条件格式：广告费占比 > 0.5 变红
                                 if col == '广告费占比':
-                                    ws.conditional_format(1, i, len(df_obj), i, {'type': 'cell', 'criteria': '>', 'value': 0.5, 'format': fmt_red_alert})
+                                    ws.conditional_format(1, i, len(df_obj), i, {
+                                        'type': 'cell',
+                                        'criteria': '>',
+                                        'value': 0.5,
+                                        'format': fmt_red_alert
+                                    })
 
                         set_sheet_format('利润分析', df_final_clean, IDX_M_CODE)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
