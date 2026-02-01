@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (完美表头版)")
+st.title("📊 Coupang 经营分析看板 (长窗口浏览版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -236,7 +236,7 @@ if file_master and files_sales and files_ads:
                 
                 df_final['滞销库存货值'] = df_final.apply(calc_dead_stock_value, axis=1)
 
-                # --- Step 8: 深度清洗与重命名 (关键修改) ---
+                # --- Step 8: 深度清洗与重命名 ---
                 cols_master_AM = df_master.columns[:13].tolist()
                 
                 # 构造 Sheet1 列
@@ -254,7 +254,7 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet3 = df_final[cols_inv_final].copy()
 
-                # 【核心】统一重命名：去除 P/Q/R/S 列前缀
+                # 重命名
                 rename_dict = {
                     'P列_SKU总毛利': 'SKU总毛利',
                     'Q列_产品总利润': '产品总利润',
@@ -264,7 +264,6 @@ if file_master and files_sales and files_ads:
                 
                 df_final_clean.rename(columns=rename_dict, inplace=True)
                 df_sheet2.rename(columns=rename_dict, inplace=True)
-                # df_sheet3 不需要重命名，因为它用的都是直接的字段名
 
                 # ==========================================
                 # 🔍 Step 9: 执行筛选
@@ -276,22 +275,15 @@ if file_master and files_sales and files_ads:
                     df_sheet3 = df_sheet3[df_sheet3[col_code_name].astype(str).str.contains(filter_code, na=False)]
 
                 if filter_profit == "只看盈利 (>0)":
-                    # 使用 df_final 的原始索引进行同步
-                    mask = df_final['S列_最终净利润'] > 0
-                    # 注意：df_final_clean 已经改名了，所以用 '最终净利润'
                     df_final_clean = df_final_clean[df_final_clean['最终净利润'] > 0]
-                    # df_sheet3 还没改名，但行是对应的，可以用原始 mask 筛选吗？
-                    # 更安全的做法：重新计算 mask 或者根据 df_final_clean 的 index 筛选
                     valid_indices = df_final_clean.index
                     df_sheet3 = df_sheet3.loc[df_sheet3.index.isin(valid_indices)]
-                    
                     df_sheet2 = df_sheet2[df_sheet2['最终净利润'] > 0]
                     
                 elif filter_profit == "只看亏损 (<0)":
                     df_final_clean = df_final_clean[df_final_clean['最终净利润'] < 0]
                     valid_indices = df_final_clean.index
                     df_sheet3 = df_sheet3.loc[df_sheet3.index.isin(valid_indices)]
-                    
                     df_sheet2 = df_sheet2[df_sheet2['最终净利润'] < 0]
 
                 # ==========================================
@@ -302,7 +294,7 @@ if file_master and files_sales and files_ads:
                     st.warning(f"⚠️ 筛选结果为空。")
                 else:
                     total_qty = df_sheet2['产品总销量'].sum()
-                    net_profit = df_sheet2['最终净利润'].sum() # 已改名
+                    net_profit = df_sheet2['最终净利润'].sum()
                     inv_value_total = df_sheet3['库存货值'].sum()
                     dead_stock_value = df_sheet3['滞销库存货值'].sum()
                     total_restock = df_sheet3['待补数量'].sum()
@@ -360,10 +352,8 @@ if file_master and files_sales and files_ads:
                                 styles.loc[is_odd, :] = 'background-color: #f0f2f6' 
                                 return styles
                             styler = styler.apply(zebra_rows, axis=None)
-                            # 确保列存在再应用高亮
-                            valid_cols = [c for c in cols_to_color if c in df.columns]
-                            if valid_cols:
-                                styler = styler.background_gradient(subset=valid_cols, cmap='RdYlGn', vmin=-10000, vmax=10000)
+                            if not df.empty and 'S列_最终净利润' in df.columns:
+                                styler = styler.background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000)
                             return styler
                         except: return df
                     
@@ -405,21 +395,23 @@ if file_master and files_sales and files_ads:
 
                     with tab1:
                         st.caption("利润明细 (Sheet1)")
-                        # 注意：列名已改，这里传新列名
-                        st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=600)
+                        # 【修改点】高度调整为 1500
+                        st.dataframe(apply_visual_style(df_final_clean, ['最终净利润']), use_container_width=True, height=1500)
                     
                     with tab2:
                         st.caption("业务汇总 (Sheet2)")
-                        st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], is_sheet2=True), use_container_width=True, height=600)
+                        # 【修改点】高度调整为 1500
+                        st.dataframe(apply_visual_style(df_sheet2, ['最终净利润'], is_sheet2=True), use_container_width=True, height=1500)
                     
                     with tab3:
                         st.caption("库存分析 (Sheet3)")
+                        # 【修改点】高度调整为 1500
                         try:
                             st_inv = apply_inventory_style(df_sheet3)
                             st_inv = st_inv.bar(subset=['总库存'], color='#800080')\
                                            .bar(subset=['库存货值'], color='#2ca02c')\
                                            .bar(subset=['滞销库存货值'], color='#880e4f')
-                            st.dataframe(st_inv, use_container_width=True, height=600)
+                            st.dataframe(st_inv, use_container_width=True, height=1500)
                         except:
                             st.dataframe(df_sheet3, use_container_width=True)
 
