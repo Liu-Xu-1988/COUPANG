@@ -2,19 +2,20 @@ import streamlit as st
 import pandas as pd
 import io
 import re
+import numpy as np  # 引入numpy用于快速计算斑马纹
 
 # ==========================================
 # 1. 页面配置 (宽屏)
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (双库存版)")
-st.title("📊 Coupang 经营分析看板 (全功能版+双库存)")
+st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
+st.title("📊 Coupang 经营分析看板 (全功能版+双库存+可视化斑马纹)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
 IDX_M_CODE   = 0    # A列: 内部编码
 IDX_M_SKU    = 3    # D列: SKU ID (用于匹配火箭仓)
 IDX_M_PROFIT = 10   # K列: 单品毛利
-IDX_M_BAR    = 12   # M列: ID号码 (用于匹配极风库存) --> 新增配置
+IDX_M_BAR    = 12   # M列: ID号码 (用于匹配极风库存)
 
 # Sales表 (销售表)
 IDX_S_ID     = 0    # A列
@@ -30,7 +31,7 @@ IDX_A_SALES    = 29 # AD列 (30列)
 IDX_I_R_ID   = 2    # C列: ID
 IDX_I_R_QTY  = 7    # H列: 库存数量
 
-# Inventory Jifeng (极风) --> 新增配置
+# Inventory Jifeng (极风)
 IDX_I_J_BAR  = 2    # C列: 产品条码
 IDX_I_J_QTY  = 10   # K列: 数值
 # -----------------
@@ -46,7 +47,6 @@ with st.sidebar:
     files_sales = st.file_uploader("2. 销售表 (Sales)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_ads = st.file_uploader("3. 广告表 (Ads)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
     files_inv = st.file_uploader("4. 库存信息表 (火箭仓 Rocket)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
-    # 新增上传入口
     files_inv_j = st.file_uploader("5. 极风库存表 (极风 Jifeng)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
@@ -81,7 +81,7 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    if st.button("🚀 生成双库存报表", type="primary", use_container_width=True):
+    if st.button("🚀 生成报表 (含可视化斑马纹)", type="primary", use_container_width=True):
         try:
             with st.spinner("正在全速处理数据..."):
                 
@@ -89,11 +89,8 @@ if file_master and files_sales and files_ads:
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
 
-                # 匹配键1：用于火箭仓和销售 (D列 SKU)
                 df_master['_MATCH_SKU'] = clean_for_match(df_master.iloc[:, IDX_M_SKU])
-                # 匹配键2：用于极风库存 (M列 ID号码) --> 新增
                 df_master['_MATCH_BAR'] = clean_for_match(df_master.iloc[:, IDX_M_BAR])
-                
                 df_master['_MATCH_CODE'] = clean_for_match(df_master.iloc[:, IDX_M_CODE])
                 df_master['_VAL_PROFIT'] = clean_num(df_master.iloc[:, IDX_M_PROFIT])
 
@@ -122,68 +119,60 @@ if file_master and files_sales and files_ads:
                 ads_agg = valid_ads.groupby('_MATCH_CODE')[['含税广告费', '广告销量']].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费', '广告销量': '产品广告销量'}, inplace=True)
 
-                # --- Step 4.1: 火箭仓库存表处理 (Rocket) ---
+                # --- Step 4.1: 火箭仓库存 ---
                 if files_inv:
                     inv_list = [read_file_strict(f) for f in files_inv]
                     df_inv_all = pd.concat(inv_list, ignore_index=True)
-                    
                     df_inv_all['_MATCH_SKU'] = clean_for_match(df_inv_all.iloc[:, IDX_I_R_ID])
                     df_inv_all['火箭仓库存'] = clean_num(df_inv_all.iloc[:, IDX_I_R_QTY])
-                    
                     inv_agg = df_inv_all.groupby('_MATCH_SKU')['火箭仓库存'].sum().reset_index()
                 else:
                     inv_agg = pd.DataFrame(columns=['_MATCH_SKU', '火箭仓库存'])
 
-                # --- Step 4.2: 极风库存表处理 (Jifeng) --> 新增模块 ---
+                # --- Step 4.2: 极风库存 ---
                 if files_inv_j:
                     inv_j_list = [read_file_strict(f) for f in files_inv_j]
                     df_inv_j_all = pd.concat(inv_j_list, ignore_index=True)
-                    
-                    # 匹配逻辑：极风 C列 (产品条码) 对 基础表 M列 (ID号码)
                     df_inv_j_all['_MATCH_BAR'] = clean_for_match(df_inv_j_all.iloc[:, IDX_I_J_BAR])
                     df_inv_j_all['极风库存'] = clean_num(df_inv_j_all.iloc[:, IDX_I_J_QTY])
-                    
                     inv_j_agg = df_inv_j_all.groupby('_MATCH_BAR')['极风库存'].sum().reset_index()
                 else:
                     inv_j_agg = pd.DataFrame(columns=['_MATCH_BAR', '极风库存'])
 
                 # --- Step 5: 关联 & 计算 ---
-                # 5.1 基础 + 销售 (按 SKU)
+                # 5.1 基础 + 销售
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
                 
-                # 5.2 关联 火箭仓库存 (按 SKU)
+                # 5.2 关联库存
                 df_final = pd.merge(df_final, inv_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['火箭仓库存'] = df_final['火箭仓库存'].fillna(0).astype(int)
-
-                # 5.3 关联 极风库存 (按 条码 Barcode) --> 新增关联
+                
                 df_final = pd.merge(df_final, inv_j_agg, on='_MATCH_BAR', how='left', sort=False)
                 df_final['极风库存'] = df_final['极风库存'].fillna(0).astype(int)
 
-                # 5.4 利润计算
+                # 5.3 利润
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 df_final['产品总销量'] = df_final.groupby('_MATCH_CODE', sort=False)['O列_合并销量'].transform('sum')
                 
-                # 5.5 关联广告
+                # 5.4 广告
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 df_final['产品广告销量'] = df_final['产品广告销量'].fillna(0)
                 
-                # 5.6 净利计算
+                # 5.5 净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
                 # --- Step 6: 报表生成 ---
                 
-                # Sheet2: 业务报表
-                # 需要把库存也汇总到产品维度
+                # Sheet2: 业务报表 (产品级汇总)
+                # 汇总库存到产品维度
                 df_final['产品_火箭仓库存'] = df_final.groupby('_MATCH_CODE', sort=False)['火箭仓库存'].transform('sum')
                 df_final['产品_极风库存'] = df_final.groupby('_MATCH_CODE', sort=False)['极风库存'].transform('sum')
 
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润', '产品总销量', '产品广告销量', '产品_火箭仓库存', '产品_极风库存']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
-                
-                # 重命名以便展示
                 df_sheet2.rename(columns={'产品_火箭仓库存': '火箭仓库存', '产品_极风库存': '极风库存'}, inplace=True)
 
                 df_sheet2['广告/毛利比'] = df_sheet2.apply(
@@ -201,19 +190,17 @@ if file_master and files_sales and files_ads:
                 ]
                 df_sheet2 = df_sheet2[cols_order_s2]
 
-                # Sheet3: 库存分析
-                # 保留 Master 前 13 列 (A-M) + 火箭仓 + 极风
+                # Sheet3: 库存分析 (SKU级明细)
                 cols_master_AM = df_final.columns[:13].tolist() 
                 df_sheet3 = df_final[cols_master_AM + ['火箭仓库存', '极风库存']].copy()
-                # 重命名表头
                 df_sheet3.rename(columns={'火箭仓库存': '火箭仓库存数量'}, inplace=True)
 
-                # --- Step 7: 清理辅助列 ---
+                # --- Step 7: 清理 ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_') or c.startswith('产品_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
                 # ==========================================
-                # 🔥 看板展示
+                # 🔥 看板展示 (含可视化斑马纹)
                 # ==========================================
                 
                 total_qty = df_sheet2['产品总销量'].sum()
@@ -224,41 +211,67 @@ if file_master and files_sales and files_ads:
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("💰 最终净利润", f"{net_profit:,.0f}")
                 k2.metric("📦 总销售数量", f"{total_qty:,.0f}") 
-                k3.metric("🏭 总库存量", f"{inv_total:,.0f}", help="包含火箭仓和极风库存")
+                k3.metric("🏭 总库存量", f"{inv_total:,.0f}")
                 k4.metric("📊 动销率", f"{(total_qty/inv_total if inv_total else 0):.1%}")
 
                 st.divider()
 
                 tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)", "🏭 3. 库存分析 (明细)"])
                 
-                def try_style(df, cols, is_sheet2=False):
+                # --- 可视化样式函数 (斑马纹+高亮) ---
+                def apply_visual_style(df, cols_to_color, is_sheet2=False):
                     try:
+                        # 1. 基础格式化
                         styler = df.style.format(precision=0)
                         if is_sheet2:
                             styler = styler.format({
                                 '广告/毛利比': '{:.1%}', '自然销量占比': '{:.1%}',
                                 '产品总销量': '{:,.0f}', '产品广告销量': '{:,.0f}', '自然销量': '{:,.0f}'
                             })
-                        return styler.background_gradient(subset=cols, cmap='RdYlGn', vmin=-10000, vmax=10000)
-                    except: return df
+
+                        # 2. 斑马纹逻辑 (基于第一列 Code 变化)
+                        def zebra_rows(x):
+                            # x 是整个 dataframe
+                            # 获取第一列(Code)
+                            codes = x.iloc[:, 0].astype(str)
+                            # 识别组变化: A, A, B, B -> 0, 0, 1, 1
+                            groups = (codes != codes.shift()).cumsum()
+                            # 奇数组设为浅灰色
+                            is_odd = groups % 2 != 0
+                            
+                            # 构建全表样式
+                            # Streamlit 默认背景是白色(亮色模式)，我们用浅灰 #f0f2f6 做交替
+                            styles = pd.DataFrame('', index=x.index, columns=x.columns)
+                            # 广播赋值
+                            styles.loc[is_odd, :] = 'background-color: #f0f2f6' 
+                            return styles
+                        
+                        styler = styler.apply(zebra_rows, axis=None)
+
+                        # 3. 叠加盈亏高亮 (这会覆盖掉上面的斑马纹背景，只针对特定列)
+                        styler = styler.background_gradient(subset=cols_to_color, cmap='RdYlGn', vmin=-10000, vmax=10000)
+                        
+                        return styler
+                    except Exception as e:
+                        # 降级处理
+                        return df
 
                 with tab1:
-                    st.caption("利润明细 (Sheet1)")
-                    st.dataframe(try_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
+                    st.caption("利润明细 (Sheet1) - 已应用产品斑马纹")
+                    st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                 
                 with tab2:
                     st.caption("业务汇总 (Sheet2)")
-                    st.dataframe(try_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
+                    st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                 
                 with tab3:
-                    st.caption("库存分析 (Sheet3) - N列:火箭仓, O列:极风")
+                    st.caption("库存分析 (Sheet3)")
+                    # 对于库存表，我们不仅加斑马纹，还加数据条
                     try:
-                        st.dataframe(
-                            df_sheet3.style.format(precision=0)
-                            .bar(subset=['火箭仓库存数量'], color='#5fba7d')
-                            .bar(subset=['极风库存'], color='#4472c4'),
-                            use_container_width=True, height=600
-                        )
+                        st_inv = apply_visual_style(df_sheet3, []) # 不传排序列，只应用斑马纹
+                        # 叠加数据条
+                        st_inv = st_inv.bar(subset=['火箭仓库存数量'], color='#5fba7d').bar(subset=['极风库存'], color='#4472c4')
+                        st.dataframe(st_inv, use_container_width=True, height=600)
                     except:
                         st.dataframe(df_sheet3, use_container_width=True)
 
@@ -276,7 +289,6 @@ if file_master and files_sales and files_ads:
                     fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
                     fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                     
-                    # 斑马纹格式
                     base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                     fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                     fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
@@ -298,7 +310,6 @@ if file_master and files_sales and files_ads:
                     apply_zebra('利润分析', df_final, IDX_M_CODE)
                     apply_zebra('库存分析', df_sheet3, IDX_M_CODE)
 
-                    # Sheet2 样式
                     ws2 = writer.sheets['业务报表']
                     for i, val in enumerate(df_sheet2.columns): ws2.write(0, i, val, fmt_header)
                     ws2.set_column(0, 0, 20)
@@ -309,12 +320,12 @@ if file_master and files_sales and files_ads:
                     ws2.set_column(9, 10, 15, fmt_money)
 
                 st.divider()
-                st.success("✅ 全套报表生成完毕！")
+                st.success("✅ 报表生成完毕！")
                 
                 st.download_button(
                     label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                     data=output.getvalue(),
-                    file_name="Coupang_Full_Report_Dual_Inventory.xlsx",
+                    file_name="Coupang_Full_Report_Visual.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
@@ -323,4 +334,4 @@ if file_master and files_sales and files_ads:
         except Exception as e:
             st.error(f"❌ 运行出错: {e}")
 else:
-    st.info("👈 请上传文件 (库存表可选)")
+    st.info("👈 请上传文件")
